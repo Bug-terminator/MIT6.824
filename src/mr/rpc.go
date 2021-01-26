@@ -30,7 +30,7 @@ type Args struct {
 
 type Reply struct {
 	respond, sleep bool
-	Type,idx int
+	idx int
 	fileName string
 }
 // Cook up a unique-ish UNIX-domain socket name
