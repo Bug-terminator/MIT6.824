@@ -1,15 +1,45 @@
 package mr
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 import "net"
 import "os"
 import "net/rpc"
 import "net/http"
 
+//map task
+type MapTask struct {
+	fileName string
+	state int // 0/1/2 not_started/undergoing/finish
+}
+//map queue
+type MapQueue struct {
+	mu sync.Mutex
+	finishNum, totalNum int
+	q []MapTask
+}
+
+//check if done
+func ( m *MapQueue) done() bool{
+	return m.finishNum == m.totalNum
+}
+
+//reduce queue
+type ReduceQueue struct {
+	mu sync.Mutex
+	finishNum, totalNum int
+	q []int
+}
+func ( m *ReduceQueue) done() bool{
+	return m.finishNum == m.totalNum
+}
 
 type Master struct {
 	// Your definitions here.
-
+	mpq MapQueue
+	rdq ReduceQueue
 }
 
 //TODO Your code here -- RPC handlers for the worker to call.
@@ -63,7 +93,15 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{}
 
 	// TODO Your code here.
-
+	// init map queue
+	m.mpq.totalNum = len(files)
+	for _,file := range files{
+		newTask := MapTask{file,0}
+		m.mpq.q = append(m.mpq.q, newTask)
+	}
+	// init reduce queue
+	m.rdq.totalNum = nReduce
+	m.rdq.q = make([]int, nReduce)
 
 	m.server()
 	return &m
