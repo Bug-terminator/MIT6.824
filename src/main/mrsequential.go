@@ -56,6 +56,7 @@ func main() {
 	// rather than being partitioned into NxM buckets.
 	//
 
+	//shuffle
 	sort.Sort(ByKey(intermediate))
 
 	oname := "mr-out-0"

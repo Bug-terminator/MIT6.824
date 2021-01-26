@@ -1,10 +1,13 @@
 package mr
 
-import "fmt"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
-
 
 //
 // Map functions return a slice of KeyValue.
@@ -13,8 +16,16 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+// for sorting by key.
+type ByKey []KeyValue
 
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 //
+
+
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 //
@@ -23,7 +34,6 @@ func ihash(key string) int {
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
-
 
 //
 // main/mrworker.go calls this function.
@@ -34,8 +44,28 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the master.
-	// CallExample()
+	//CallExample()
+	//TODO require a job
+	// send finish to master
+	filename := GetFileName()
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
 
+	kva := mapf(filename, string(content))
+}
+
+// worker ask for a task
+func GetFileName() string{
+	args := ExampleArgs{}
+	reply := ExampleReply{}
+	call("AssignMapper", args, reply)
+	return reply.fileName
 }
 
 //

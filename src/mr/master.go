@@ -12,7 +12,7 @@ type Master struct {
 
 }
 
-// Your code here -- RPC handlers for the worker to call.
+//TODO Your code here -- RPC handlers for the worker to call.
 
 //
 // an example RPC handler.
@@ -41,7 +41,7 @@ func (m *Master) server() {
 	go http.Serve(l, nil)
 }
 
-//
+//TODO
 // main/mrmaster.go calls Done() periodically to find out
 // if the entire job has finished.
 //
@@ -62,7 +62,7 @@ func (m *Master) Done() bool {
 func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{}
 
-	// Your code here.
+	// TODO Your code here.
 
 
 	m.server()

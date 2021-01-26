@@ -20,11 +20,19 @@ type ExampleArgs struct {
 
 type ExampleReply struct {
 	Y int
+	fileName string
 }
 
-// Add your RPC definitions here.
+//TODO Add your RPC definitions here.
+type Args struct {
+	Type, idx int
+}
 
-
+type Reply struct {
+	respond, sleep bool
+	Type,idx int
+	fileName string
+}
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.
 // Can't use the current directory since
