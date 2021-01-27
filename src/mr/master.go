@@ -48,7 +48,7 @@ type Master struct {
 	mpq MapQueue
 	rdq ReduceQueue
 }
-//the timers
+//the timers to count 10s
 func MapTimer(t *MapTask){
 	time.Sleep(10 *time.Second)
 	t.mu.Lock()
@@ -101,7 +101,6 @@ func (m *Master) Request(args *Args, reply *Reply) error{
 func (m *Master) Finish(args *Args, reply *Reply) error{
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	//fmt.Println(args)//fixme
 	if args.Type == 0{//for map
 		tsk := &m.mpq.q[args.Idx]
 		tsk.mu.Lock()
@@ -178,18 +177,6 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.rdq.totalNum = nReduce
 	m.rdq.q = make([]ReduceTask, nReduce)
 
-	////generate intermediate files
-	//for i := 0;i<m.mpq.totalNum;i++{
-	//	for j:=0;j<m.rdq.totalNum;j++{
-	//		filename := "mr-"+strconv.Itoa(i)+"-"+strconv.Itoa(j)
-	//		os.Create(filename)
-	//	}
-	//}
-	////generate reduce output files
-	//for j:=0;j<m.rdq.totalNum;j++{
-	//	filename := "mr-out-"+strconv.Itoa(j)
-	//	os.Create(filename)
-	//}
 	m.server()
 	return &m
 }

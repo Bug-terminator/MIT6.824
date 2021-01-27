@@ -23,8 +23,6 @@ type KeyValue struct {
 
 // for sorting by key.
 type ByKey []KeyValue
-
-// for sorting by key.
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
@@ -45,13 +43,7 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
 	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the master.
-	//CallExample()
-	//TODO require a job
-	// send finish to master
 	for {
 		args := Args{}
 		reply := Reply{}
@@ -63,7 +55,6 @@ func Worker(mapf func(string, string) []KeyValue,
 				time.Sleep(2 * time.Second)
 			} else {                      //normal task
 				if reply.FileName != "" { //map task
-
 					// create temp files and its correlated encoders,you can also use map
 					openfileQ := make([]*os.File, reply.NReduce, reply.NReduce)
 					encoderQ := make([]*json.Encoder, reply.NReduce, reply.NReduce)
@@ -110,10 +101,6 @@ func Worker(mapf func(string, string) []KeyValue,
 					intermediate := []KeyValue{}
 					for i := 0; i < reply.NMap; i++ {
 						filename := "mr-" + strconv.Itoa(i) + "-" + strconv.Itoa(reply.Idx)
-						//err := os.Chmod(filename, 0777)
-						//if err != nil {
-						//	fmt.Println(err)
-						//}
 						file, err := os.Open(filename)
 						if err != nil {
 							log.Fatalf("cannot open %v", filename)
@@ -172,29 +159,6 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 		}
 	}
-}
-
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
-
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
 //
