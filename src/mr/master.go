@@ -39,11 +39,13 @@ type ReduceQueue struct {
 	q []ReduceTask
 }
 func ( m *ReduceQueue) done() bool{
+
 	return m.finishNum == m.totalNum
 }
 
 type Master struct {
 	// Your definitions here.
+	mu sync.Mutex
 	mpq MapQueue
 	rdq ReduceQueue
 }
@@ -66,36 +68,31 @@ func ReduceTimer(t *ReduceTask){
 }
 // Your code here -- RPC handlers for the worker to call.
 func (m *Master) Request(args *Args, reply *Reply) error{
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	reply.Respond = true
-
 	if m.mpq.done(){//for reduce
 		//find a not_started task
 		for i,tsk := range m.rdq.q{
-			tsk.mu.Lock()
 			if tsk.state == 0{
 				tsk.state = 1
-				go ReduceTimer(&tsk)
+				//go ReduceTimer(&tsk)todo
 				reply.Idx = i
 				reply.NMap = m.mpq.totalNum
-				tsk.mu.Unlock()
 				return nil
 			}
-			tsk.mu.Unlock()
 		}
 	}else {//for map
 		//find a not_started task
 		for i,tsk := range m.mpq.q{
-			tsk.mu.Lock()
 			if tsk.state == 0{
 				tsk.state = 1
-				go MapTimer(&tsk)
+				//go MapTimer(&tsk)todo
 				reply.Idx = i
 				reply.NReduce = m.rdq.totalNum
 				reply.FileName = tsk.fileName
-				tsk.mu.Unlock()
 				return nil
 			}
-			tsk.mu.Unlock()
 		}
 	}
 	//if don't find one
@@ -103,6 +100,8 @@ func (m *Master) Request(args *Args, reply *Reply) error{
 	return nil
 }
 func (m *Master) Finish(args *Args, reply *Reply) error{
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	//fmt.Println(args)//fixme
 	if args.Type == 0{//for map
 		tsk := &m.mpq.q[args.Idx]

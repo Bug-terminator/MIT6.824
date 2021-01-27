@@ -134,7 +134,7 @@ func Worker(mapf func(string, string) []KeyValue,
 						strs := strings.Fields(string(content))
 						//append kv-pairs to intermediate
 						for j := 0; j < len(strs); j += 2 {
-							kv := KeyValue{strs[i], strs[i+1]}
+							kv := KeyValue{strs[j], strs[j+1]}
 							intermediate = append(intermediate, kv)
 						}
 						//shuffle
