@@ -2,6 +2,7 @@ package mr
 
 import (
 	"log"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -63,9 +64,9 @@ func ReduceTimer(t *ReduceTask){
 	}
 	t.mu.Unlock()
 }
-//TODO Your code here -- RPC handlers for the worker to call.
-func (m *Master) Request(args *Args, reply *Reply) {
-	reply.respond = true
+// Your code here -- RPC handlers for the worker to call.
+func (m *Master) Request(args *Args, reply *Reply) error{
+	reply.Respond = true
 
 	if m.mpq.done(){//for reduce
 		//find a not_started task
@@ -74,9 +75,10 @@ func (m *Master) Request(args *Args, reply *Reply) {
 			if tsk.state == 0{
 				tsk.state = 1
 				go ReduceTimer(&tsk)
-				reply.idx = i
+				reply.Idx = i
+				reply.NMap = m.mpq.totalNum
 				tsk.mu.Unlock()
-				return
+				return nil
 			}
 			tsk.mu.Unlock()
 		}
@@ -87,21 +89,23 @@ func (m *Master) Request(args *Args, reply *Reply) {
 			if tsk.state == 0{
 				tsk.state = 1
 				go MapTimer(&tsk)
-				reply.idx = i
-				reply.fileName = tsk.fileName
+				reply.Idx = i
+				reply.NReduce = m.rdq.totalNum
+				reply.FileName = tsk.fileName
 				tsk.mu.Unlock()
-				return
+				return nil
 			}
 			tsk.mu.Unlock()
 		}
 	}
 	//if don't find one
-	reply.sleep = true
-	return
+	reply.Sleep = true
+	return nil
 }
-func (m *Master) Finish(args *Args, reply *Reply) {
+func (m *Master) Finish(args *Args, reply *Reply) error{
+	//fmt.Println(args)//fixme
 	if args.Type == 0{//for map
-		tsk := &m.mpq.q[args.idx]
+		tsk := &m.mpq.q[args.Idx]
 		tsk.mu.Lock()
 		if tsk.state != 2{
 			m.mpq.finishNum++
@@ -109,7 +113,7 @@ func (m *Master) Finish(args *Args, reply *Reply) {
 		}
 		tsk.mu.Unlock()
 	}else{//for reduce
-		tsk := &m.rdq.q[args.idx]
+		tsk := &m.rdq.q[args.Idx]
 		tsk.mu.Lock()
 		if tsk.state != 2{
 			m.rdq.finishNum++
@@ -117,6 +121,7 @@ func (m *Master) Finish(args *Args, reply *Reply) {
 		}
 		tsk.mu.Unlock()
 	}
+	return nil
 }
 
 //
@@ -146,17 +151,13 @@ func (m *Master) server() {
 	go http.Serve(l, nil)
 }
 
-//TODO
+//
 // main/mrmaster.go calls Done() periodically to find out
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	ret := false
-
 	// Your code here.
-
-
-	return ret
+	return 	m.rdq.done() && m.mpq.done()
 }
 
 //
@@ -179,6 +180,18 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.rdq.totalNum = nReduce
 	m.rdq.q = make([]ReduceTask, nReduce)
 
+	//generate intermediate files
+	for i := 0;i<m.mpq.totalNum;i++{
+		for j:=0;j<m.rdq.totalNum;j++{
+			filename := "mr-"+strconv.Itoa(i)+"-"+strconv.Itoa(j)
+			os.Create(filename)
+		}
+	}
+	//generate reduce output files
+	for j:=0;j<m.rdq.totalNum;j++{
+		filename := "mr-out-"+strconv.Itoa(j)
+		os.Create(filename)
+	}
 	m.server()
 	return &m
 }

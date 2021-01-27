@@ -60,6 +60,7 @@ func main() {
 	sort.Sort(ByKey(intermediate))
 
 	oname := "mr-out-0"
+
 	ofile, _ := os.Create(oname)
 
 	//
@@ -71,6 +72,7 @@ func main() {
 		j := i + 1
 		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
 			j++
+
 		}
 		values := []string{}
 		for k := i; k < j; k++ {
@@ -85,6 +87,7 @@ func main() {
 	}
 
 	ofile.Close()
+
 }
 
 //
