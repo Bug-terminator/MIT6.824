@@ -2,7 +2,6 @@ package mr
 
 import (
 	"log"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -179,18 +178,18 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.rdq.totalNum = nReduce
 	m.rdq.q = make([]ReduceTask, nReduce)
 
-	//generate intermediate files
-	for i := 0;i<m.mpq.totalNum;i++{
-		for j:=0;j<m.rdq.totalNum;j++{
-			filename := "mr-"+strconv.Itoa(i)+"-"+strconv.Itoa(j)
-			os.Create(filename)
-		}
-	}
-	//generate reduce output files
-	for j:=0;j<m.rdq.totalNum;j++{
-		filename := "mr-out-"+strconv.Itoa(j)
-		os.Create(filename)
-	}
+	////generate intermediate files
+	//for i := 0;i<m.mpq.totalNum;i++{
+	//	for j:=0;j<m.rdq.totalNum;j++{
+	//		filename := "mr-"+strconv.Itoa(i)+"-"+strconv.Itoa(j)
+	//		os.Create(filename)
+	//	}
+	//}
+	////generate reduce output files
+	//for j:=0;j<m.rdq.totalNum;j++{
+	//	filename := "mr-out-"+strconv.Itoa(j)
+	//	os.Create(filename)
+	//}
 	m.server()
 	return &m
 }

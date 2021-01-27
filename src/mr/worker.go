@@ -1,13 +1,12 @@
 package mr
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 )
 import "log"
@@ -57,7 +56,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		args := Args{}
 		reply := Reply{}
 		call("Master.Request", &args, &reply)
-		//fmt.Println(reply)  //fixme
 		if !reply.Respond { //master doesn't respond
 			break
 		} else {
@@ -65,22 +63,17 @@ func Worker(mapf func(string, string) []KeyValue,
 				time.Sleep(2 * time.Second)
 			} else {                      //normal task
 				if reply.FileName != "" { //map task
-					//slice to store bufio.writer
-					var bufferQ []*bufio.Writer
 
-					//open all related files,and bind them with buffer
+					// create temp files and its correlated encoders,you can also use map
+					openfileQ := make([]*os.File, reply.NReduce, reply.NReduce)
+					encoderQ := make([]*json.Encoder, reply.NReduce, reply.NReduce)
 					for i := 0; i < reply.NReduce; i++ {
-						filename := "mr-" + strconv.Itoa(reply.Idx) + "-" + strconv.Itoa(i)
-						file, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
+						tmp, err := ioutil.TempFile(".", "Inter")
 						if err != nil {
-							fmt.Println("open file failed, err:", err)
-							return
+							log.Fatalf("cannot create temp file")
 						}
-
-						defer file.Close()
-						writer := bufio.NewWriter(file)
-
-						bufferQ = append(bufferQ, writer)
+						openfileQ[i] = tmp
+						encoderQ[i] = json.NewEncoder(tmp)
 					}
 
 					//get content,invoke map function and get kva
@@ -95,22 +88,18 @@ func Worker(mapf func(string, string) []KeyValue,
 					file.Close()
 					kva := mapf(reply.FileName, string(content))
 
-					//hash key,then write them to correlated buffer
+					//hash key,then encode them to corraleted file
 					for _, kv := range kva {
 						hashKey := ihash(kv.Key) % reply.NReduce
-						bufferQ[hashKey].WriteString(kv.Key + " " + kv.Value + " ")
+						encoderQ[hashKey].Encode(&kv)
 					}
-					//flush buffer
-					for i, buffer := range bufferQ {
-						filename := "mr-" + strconv.Itoa(reply.Idx) + "-" + strconv.Itoa(i)
-						info, err := os.Stat(filename)
-						if err != nil {
-							log.Fatalf("cannot get file info")
-						} else if info.Size() == 0 {
-							fmt.Println("buffer size:%d", buffer.Size())
-							buffer.Flush()
 
-						} //FIXME might be wrong
+					//rename && close files,notice that close should be done before renaming
+					for i, f:= range openfileQ {
+						filename := "mr-" + strconv.Itoa(reply.Idx) + "-" + strconv.Itoa(i)
+						fname := f.Name()
+						f.Close()
+						os.Rename(fname, filename)
 					}
 					//send finish to master
 					args.Idx = reply.Idx
@@ -121,67 +110,64 @@ func Worker(mapf func(string, string) []KeyValue,
 					intermediate := []KeyValue{}
 					for i := 0; i < reply.NMap; i++ {
 						filename := "mr-" + strconv.Itoa(i) + "-" + strconv.Itoa(reply.Idx)
+						//err := os.Chmod(filename, 0777)
+						//if err != nil {
+						//	fmt.Println(err)
+						//}
 						file, err := os.Open(filename)
 						if err != nil {
 							log.Fatalf("cannot open %v", filename)
 						}
-						content, err := ioutil.ReadAll(file)
-						if err != nil {
-							log.Fatalf("cannot read %v", filename)
-						}
-						file.Close()
-						//split content into string slice
-						strs := strings.Fields(string(content))
+						dec := json.NewDecoder(file)
 						//append kv-pairs to intermediate
-						for j := 0; j < len(strs); j += 2 {
-							kv := KeyValue{strs[j], strs[j+1]}
+						for {
+							var kv KeyValue
+							if err := dec.Decode(&kv); err != nil {
+								break
+							}
 							intermediate = append(intermediate, kv)
 						}
-						//shuffle
-						sort.Sort(ByKey(intermediate))
-						//bind output file to a buffer
-						oname := "mr-out-" + strconv.Itoa(reply.Idx)
-						ofile, err := os.OpenFile(oname, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
-						if err != nil {
-							fmt.Println("open file failed, err:", err)
-							return
-						}
-						defer ofile.Close()
-						writer := bufio.NewWriter(ofile)
-						//
-						// call Reduce on each distinct key in intermediate[],
-						// and print the result to mr-out-X.
-						//
-						i := 0
-						for i < len(intermediate) {
-							j := i + 1
-							for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
-								j++
-							}
-							values := []string{}
-							for k := i; k < j; k++ {
-								values = append(values, intermediate[k].Value)
-							}
-							output := reducef(intermediate[i].Key, values)
-
-							// this is the correct format for each line of Reduce output.
-							//fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
-							writer.WriteString(intermediate[i].Key + " " + output + "\n")
-							i = j
-						}
-						//flush buffer
-						info, err := os.Stat(oname)
-						if err != nil {
-							log.Fatalf("cannot get file info")
-						} else if info.Size() == 0 {
-							writer.Flush()
-						} //FIXME might be wrong
-
-						//send finish to master
-						args.Idx = reply.Idx
-						args.Type = 1
-						call("Master.Finish", &args, &reply)
+						file.Close()
 					}
+					//shuffle
+					sort.Sort(ByKey(intermediate))
+
+					//create tmp output file
+					tmp, err := ioutil.TempFile(".", "Out")
+					if err != nil {
+						log.Fatalf("cannot create temp file")
+					}
+
+					//
+					// call Reduce on each distinct key in intermediate[],
+					// and print the result to mr-out-X.
+					//
+					i := 0
+					for i < len(intermediate) {
+						j := i + 1
+						for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+							j++
+						}
+						values := []string{}
+						for k := i; k < j; k++ {
+							values = append(values, intermediate[k].Value)
+						}
+						output := reducef(intermediate[i].Key, values)
+
+						// this is the correct format for each line of Reduce output.
+						fmt.Fprintf(tmp, "%v %v\n", intermediate[i].Key, output)
+
+						i = j
+					}
+					//rename
+					fname := tmp.Name()
+					tmp.Close()
+					oname := "mr-out-" + strconv.Itoa(reply.Idx)
+					os.Rename(fname, oname)
+					//send finish to master
+					args.Idx = reply.Idx
+					args.Type = 1
+					call("Master.Finish", &args, &reply)
 				}
 			}
 		}
