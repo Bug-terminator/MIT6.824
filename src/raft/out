@@ -1,0 +1,6 @@
+Test (2A): initial election ...
+  ... Passed --   3.0  3   56   12898    0
+Test (2A): election after network failure ...
+  ... Passed --   7.9  3  174   31822    0
+PASS
+ok  	_/mnt/c/Users/litang/githubWorkSpace/MIT-6.824repo/src/raft	11.919s

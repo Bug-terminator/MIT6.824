@@ -152,14 +152,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		reply.Term = rf.currentTerm
 	}
-	if args.Term > rf.currentTerm { //fixme
+	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.voteFor = args.CandidateID
 		reply.VoteGranted = true
-		rf.state = 0 //fixme for web partition then a re-election happened
+		rf.state = 0 //for web partition then a re-election happened
 		rf.ResetElectionTimeout()
 	}
-	rf.mu.Lock()
+	rf.mu.Unlock()
 }
 
 //lab 2A AppendEntry struct and handler
@@ -177,7 +177,7 @@ type AppendEntryReply struct {
 	Term    int
 	Success bool
 }
-
+// append entry handler
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	//2A
 	rf.mu.Lock()
@@ -220,10 +220,10 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 //
-//func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-//	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-//	return ok
-//}
+func (rf *Raft) sendRequestVote1(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -292,7 +292,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.heartbeatTimeout = 100
 	rf.currentTerm = 0
 	rf.state = 0
-	rf.lastVisited = time.Now().UnixNano()/1e6
+	rf.lastVisited = time.Now().UnixNano() / 1e6
 	rf.electionTimeout = RandomTimeGenerator()
 	go rf.HeartBeatMonitor()
 	go rf.ReElectionMonitor()
@@ -304,7 +304,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 //request vote random timeout generator,range: [200,400)
 func RandomTimeGenerator() int64 {
-	return rand.New(rand.NewSource(time.Now().UnixNano())).Int63n(200) + 200 //fixme may be wrong
+	rd := rand.New(rand.NewSource(time.Now().UnixNano())).Int63n(200) + 200
+	return rd
 }
 
 //reset timeout
@@ -319,7 +320,7 @@ func (rf *Raft) ResetHeartBeatTimeout() {
 
 // check if election timeout have been reached,frequency: 1time/1ms
 func (rf *Raft) ReElectionMonitor() {
-	for !rf.killed(){ //fixme need killed()?
+	for !rf.killed() {
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		rf.mu.Lock()
 		limit := rf.lastVisited + rf.electionTimeout
@@ -348,23 +349,23 @@ func (rf *Raft) sendRequestVote() {
 	cond := sync.NewCond(&mu)
 
 	for i, _ := range rf.peers {
-		if i == rf.me { //fixme rf.me or rf.me- 1?
+		if i == rf.me {
 			continue
 		}
 		go func(i int) {
 			args := RequestVoteArgs{rf.currentTerm, rf.me, 0, 0} //todo lab 2B need more
-			reply := RequestVoteReply{}
+			reply := RequestVoteReply{0, false}
 			rf.peers[i].Call("Raft.RequestVote", &args, &reply)
 			mu.Lock()
 			rf.mu.Lock()
-			if reply.Term >= rf.currentTerm { //fixme > or >= ?
+			if reply.Term >= rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.state = 0
 				rf.ResetElectionTimeout()
 				rf.mu.Unlock()
 				cond.Signal()
 				mu.Unlock()
-				return //fixme check twice
+				return
 			}
 			rf.mu.Unlock()
 			if reply.VoteGranted {
@@ -376,29 +377,27 @@ func (rf *Raft) sendRequestVote() {
 		}(i)
 	}
 
+	//count of votes
 	mu.Lock()
-	for get <= total/2 && visited < total { //fixme <= or <?
+	for get <= total/2 && visited < total {
 		cond.Wait()
 	}
 	rf.mu.Lock()
-	if get > total/2 { //fixme > or >= ?
+	if get > total/2 {
 		rf.state = 2 // become leader
 		rf.ResetHeartBeatTimeout()
 		rf.sendHeartBeat()
 	} else {
 		rf.state = 0
-		//fixme reset RV timeout
 		rf.ResetElectionTimeout()
 	}
 	rf.mu.Unlock()
 	mu.Unlock()
-	//ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-
 }
 
 //check if heartBeat timeout have been reached
 func (rf *Raft) HeartBeatMonitor() {
-	for !rf.killed(){ //fixme need killed()?
+	for !rf.killed() {
 		rf.mu.Lock()
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		limit := rf.lastAE + rf.heartbeatTimeout
@@ -419,16 +418,16 @@ func (rf *Raft) sendHeartBeat() {
 			continue
 		}
 		go func(i int) {
-			args := AppendEntryArgs{Term:rf.currentTerm,LeaderId: rf.me}//todo 2B need more
-			reply := AppendEntryReply{}
+			args := AppendEntryArgs{Term: rf.currentTerm, LeaderId: rf.me} //todo 2B need more
+			reply := AppendEntryReply{0, false}
 			rf.peers[i].Call("Raft.AppendEntry", &args, &reply)
 			rf.mu.Lock()
-			if reply.Term > rf.currentTerm { //fixme > or >= ?
+			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.state = 0
 				rf.ResetElectionTimeout()
 				rf.mu.Unlock()
-				return //fixme check twice
+				return
 			}
 			rf.mu.Unlock()
 		}(i)
