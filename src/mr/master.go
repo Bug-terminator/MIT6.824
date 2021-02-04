@@ -126,10 +126,7 @@ func (m *Master) Finish(args *Args, reply *Reply) error{
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
+
 
 
 //
