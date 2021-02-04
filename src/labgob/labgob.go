@@ -1,14 +1,14 @@
 package labgob
 
-import (
-	"encoding/gob"
-	"fmt"
-	"io"
-	"reflect"
-	"sync"
-	"unicode"
-	"unicode/utf8"
-)
+//import (
+//	"encoding/gob"
+//	"fmt"
+//	"io"
+//	"reflect"
+//	"sync"
+//	"unicode"
+//	"unicode/utf8"
+//)
 
 //
 //trying to send non-capitalized fields over RPC produces a range of
