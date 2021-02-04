@@ -5,6 +5,6 @@
 ## Schedule
 
 - [x] [lab1 MapReduce](labs/lab1/README.md)
-- [ ] lab2
+- [x] [lab2 Raft](labs/lab2/README.md)
 - [ ] lab3
 - [ ] lab4
