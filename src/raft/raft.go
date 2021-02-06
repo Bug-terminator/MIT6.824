@@ -150,7 +150,7 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	//2A todo 2B
+	//2A
 	rf.mu.Lock()
 	DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
 	if rf.state == 1 {
@@ -160,11 +160,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
-		rf.voteFor = args.CandidateID
-		reply.VoteGranted = true
-		rf.state = 0 //for web partition then a re-election happened
+		rf.state = 0
 		rf.ResetElectionTimeout()
-		DPrintf("%d vote for %d", rf.me, args.CandidateID)
+		//2B
+		lastIdx := len(rf.log) - 1
+		lastTerm := rf.log[lastIdx].Term
+		//candidate’s log is at least as up-to-date as receiver’s log, grant vote
+		if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIdx <= args.LastLogIndex) {
+			reply.VoteGranted = true
+			rf.voteFor = args.CandidateID
+			DPrintf("%d vote for %d", rf.me, args.CandidateID)
+		}
 	}
 	rf.mu.Unlock()
 }
@@ -194,10 +200,35 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
-		//reply.Success = true//todo 2B
 		rf.state = 0
 		rf.currentTerm = args.Term
 		rf.ResetElectionTimeout()
+		//2B
+		if len(rf.log) > args.PrevLogIndex { //index exist
+			//shrink,in order to use append()
+			if len(rf.log) > args.PrevLogIndex+1 {
+				rf.log = rf.log[:args.PrevLogIndex+1]
+			}
+			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail fixme
+				rf.log = append(rf.log, args.Entries...)
+				DPrintf("%d add entries %v", rf.me, args.Entries)
+				if args.LeaderCommit > rf.commitIndex { //fixme should be here
+					idx := len(rf.log) - 1
+					if idx < args.LeaderCommit {
+						rf.commitIndex = idx
+					} else {
+						rf.commitIndex = args.LeaderCommit
+					}
+					for rf.commitIndex > rf.lastApplied {
+						rf.lastApplied++
+						//todo apply to state machine
+					}
+				}
+				reply.Success = true
+			} else { //doesn't match
+				rf.log = rf.log[:len(rf.log)-1] //erase last element
+			}
+		}
 	}
 	rf.mu.Unlock()
 }
