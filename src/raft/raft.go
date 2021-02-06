@@ -332,25 +332,26 @@ func (rf *Raft) ReElectionMonitor() {
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		rf.mu.Lock()
 		limit := rf.lastVisited + rf.electionTimeout
-		var suceed bool = (limit <= timeNow && rf.state == 0)
+		var suceed bool = (limit <= timeNow && rf.state != 2)
 		rf.mu.Unlock()
 		if suceed {
-			DPrintf("%d becomes candidate. %d\n", rf.me, rf.currentTerm+1)
-			rf.sendRequestVote()
+			//update related state
+			rf.mu.Lock()
+			oldTerm := rf.currentTerm + 1
+			rf.voteFor = rf.me
+			rf.state = 1
+			rf.currentTerm++
+			rf.ResetElectionTimeout()
+			rf.mu.Unlock()
+			go rf.sendRequestVote(oldTerm)
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 //candidate send requestVote to all peers
-func (rf *Raft) sendRequestVote() {
-	//update related state
-	rf.mu.Lock()
-	oldTerm := rf.currentTerm + 1
-	rf.voteFor = rf.me
-	rf.state = 1
-	rf.currentTerm++
-	rf.mu.Unlock()
+func (rf *Raft) sendRequestVote(oldTerm int) {
+	DPrintf("%d start a new requestVote. %d\n", rf.me, rf.currentTerm)
 
 	//concurrency request vote
 	total := len(rf.peers)
@@ -363,11 +364,9 @@ func (rf *Raft) sendRequestVote() {
 			continue
 		}
 		go func(i int) {
-			rf.mu.Lock()
 			args := RequestVoteArgs{oldTerm, rf.me, 0, 0} //todo lab 2B need more
 			reply := RequestVoteReply{0, false}
-			rf.mu.Unlock()
-			DPrintf("%d sending requestVote to %d\n", rf.me, i)
+			//DPrintf("%d sending requestVote to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.RequestVote", &args, &reply)
 			mu.Lock()
 			rf.mu.Lock()
@@ -385,7 +384,7 @@ func (rf *Raft) sendRequestVote() {
 				get++
 			}
 			visited++
-			DPrintf("in goroutine:%d, visited: %d get: %d", rf.me, visited, get)
+			//DPrintf("in goroutine:%d, visited: %d get: %d", rf.me, visited, get)
 			cond.Signal()
 			mu.Unlock()
 		}(i)
@@ -401,23 +400,23 @@ func (rf *Raft) sendRequestVote() {
 			mu.Unlock()
 			return
 		}
-		DPrintf("in main:%d,visited: %d", rf.me, visited)
 		rf.mu.Unlock()
 		cond.Wait()
 	}
-	DPrintf("%d count vote finish:get %d visited %d", rf.me, get, visited)
+	//DPrintf("%d count vote finish:get %d visited %d", rf.me, get, visited)
 	rf.mu.Lock()
-	if rf.state == 1 && rf.currentTerm == oldTerm { //todo conditions haven't been changed since it decide to be a candidate
+	if rf.state == 1 && rf.currentTerm == oldTerm { //conditions haven't been changed since it decide to be a candidate
 		if get > total/2 {
 			DPrintf("%d becomes leader. %d\n", rf.me, rf.currentTerm)
 			rf.state = 2 // become leader
 			rf.ResetHeartBeatTimeout()
-			rf.sendHeartBeat()
-		} else {
-			DPrintf("%d lose election.%d %d\n", rf.me, rf.currentTerm, rf.state)
-			rf.state = 0
-			rf.ResetElectionTimeout()
+			go rf.sendHeartBeat(rf.currentTerm) //fixme
 		}
+		//else {
+		//	DPrintf("%d lose election.%d %d\n", rf.me, rf.currentTerm, rf.state)
+		//	rf.state = 0
+		//	rf.ResetElectionTimeout()
+		//}
 	}
 	rf.mu.Unlock()
 	mu.Unlock()
@@ -441,19 +440,18 @@ func (rf *Raft) HeartBeatMonitor() {
 		var succeed bool = (limit <= timeNow && rf.state == 2)
 		rf.mu.Unlock() // don't call time-consuming function with lock held
 		if succeed {
+			rf.mu.Lock()
+			oldTerm := rf.currentTerm
 			rf.ResetHeartBeatTimeout()
-			rf.sendHeartBeat()
+			rf.mu.Unlock()
+			go rf.sendHeartBeat(oldTerm)
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 // leader send heartBeat to every follower
-func (rf *Raft) sendHeartBeat() {
-	rf.mu.Lock()
-	oldTerm := rf.currentTerm
-	rf.mu.Unlock()
-
+func (rf *Raft) sendHeartBeat(oldTerm int) {
 	for i, _ := range rf.peers {
 		if i == rf.me {
 			continue
