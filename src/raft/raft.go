@@ -58,12 +58,16 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// 2A
 	currentTerm, voteFor int   //term number & vote for who
-	state                int   //0/1/2 for follower/candidate/leader
+	state                int32 //0/1/2 for follower/candidate/leader
 	heartbeatTimeout     int64 // leader heartbeat timeout
 	electionTimeout      int64 // follower election timeout
 	lastAE               int64 //the last time leader send AE
 	lastVisited          int64 //the last time that followers were visited(receive a AE(follower) & RV(follower) & reply with a term larger than "me"(candidate))
-
+	//2B
+	commitIndex int   // index of highest log entry known to be committed
+	lastApplied int   // index of highest log entry applied to state machine
+	nextIndex   []int //for each server, index of the next log entry to send to that server
+	matchIndex  []int // for each server, index of highest log entry known to be replicated on server
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
@@ -147,6 +151,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	//2A
 	rf.mu.Lock()
+	DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
 	if rf.state == 1 {
 		reply.Term = rf.currentTerm - 1
 	} else {
@@ -158,6 +163,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.state = 0 //for web partition then a re-election happened
 		rf.ResetElectionTimeout()
+		DPrintf("%d vote for %d", rf.me, args.CandidateID)
 	}
 	rf.mu.Unlock()
 }
@@ -177,10 +183,12 @@ type AppendEntryReply struct {
 	Term    int
 	Success bool
 }
+
 // append entry handler
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	//2A
 	rf.mu.Lock()
+	DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
 		//reply.Success = true//todo 2B
@@ -324,9 +332,10 @@ func (rf *Raft) ReElectionMonitor() {
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		rf.mu.Lock()
 		limit := rf.lastVisited + rf.electionTimeout
-		var suceed bool = (limit < timeNow && rf.state == 0)
+		var suceed bool = (limit <= timeNow && rf.state == 0)
 		rf.mu.Unlock()
 		if suceed {
+			DPrintf("%d becomes candidate. %d\n", rf.me, rf.currentTerm+1)
 			rf.sendRequestVote()
 		}
 		time.Sleep(1 * time.Millisecond)
@@ -337,6 +346,7 @@ func (rf *Raft) ReElectionMonitor() {
 func (rf *Raft) sendRequestVote() {
 	//update related state
 	rf.mu.Lock()
+	oldTerm := rf.currentTerm + 1
 	rf.voteFor = rf.me
 	rf.state = 1
 	rf.currentTerm++
@@ -353,8 +363,11 @@ func (rf *Raft) sendRequestVote() {
 			continue
 		}
 		go func(i int) {
-			args := RequestVoteArgs{rf.currentTerm, rf.me, 0, 0} //todo lab 2B need more
+			rf.mu.Lock()
+			args := RequestVoteArgs{oldTerm, rf.me, 0, 0} //todo lab 2B need more
 			reply := RequestVoteReply{0, false}
+			rf.mu.Unlock()
+			DPrintf("%d sending requestVote to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.RequestVote", &args, &reply)
 			mu.Lock()
 			rf.mu.Lock()
@@ -372,6 +385,7 @@ func (rf *Raft) sendRequestVote() {
 				get++
 			}
 			visited++
+			DPrintf("in goroutine:%d, visited: %d get: %d", rf.me, visited, get)
 			cond.Signal()
 			mu.Unlock()
 		}(i)
@@ -380,19 +394,42 @@ func (rf *Raft) sendRequestVote() {
 	//count of votes
 	mu.Lock()
 	for get <= total/2 && visited < total {
+		rf.mu.Lock()
+		if rf.currentTerm != oldTerm || rf.state != 1 {
+			DPrintf("%d no longer be a candidate, return.\n", rf.me)
+			rf.mu.Unlock()
+			mu.Unlock()
+			return
+		}
+		DPrintf("in main:%d,visited: %d", rf.me, visited)
+		rf.mu.Unlock()
 		cond.Wait()
 	}
+	DPrintf("%d count vote finish:get %d visited %d", rf.me, get, visited)
 	rf.mu.Lock()
-	if get > total/2 {
-		rf.state = 2 // become leader
-		rf.ResetHeartBeatTimeout()
-		rf.sendHeartBeat()
-	} else {
-		rf.state = 0
-		rf.ResetElectionTimeout()
+	if rf.state == 1 && rf.currentTerm == oldTerm { //todo conditions haven't been changed since it decide to be a candidate
+		if get > total/2 {
+			DPrintf("%d becomes leader. %d\n", rf.me, rf.currentTerm)
+			rf.state = 2 // become leader
+			rf.ResetHeartBeatTimeout()
+			rf.sendHeartBeat()
+		} else {
+			DPrintf("%d lose election.%d %d\n", rf.me, rf.currentTerm, rf.state)
+			rf.state = 0
+			rf.ResetElectionTimeout()
+		}
 	}
 	rf.mu.Unlock()
 	mu.Unlock()
+}
+
+// todo check that rf.currentTerm hasn't changed since the decision to become a candidate.
+func (rf *Raft) NotChanged() bool {
+	//ct := atomic.LoadInt32(&rf.currentTerm)
+	rf.mu.Lock()
+	ret := (rf.state == 1)
+	rf.mu.Unlock()
+	return ret
 }
 
 //check if heartBeat timeout have been reached
@@ -401,7 +438,7 @@ func (rf *Raft) HeartBeatMonitor() {
 		rf.mu.Lock()
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		limit := rf.lastAE + rf.heartbeatTimeout
-		var succeed bool = (limit < timeNow && rf.state == 2)
+		var succeed bool = (limit <= timeNow && rf.state == 2)
 		rf.mu.Unlock() // don't call time-consuming function with lock held
 		if succeed {
 			rf.ResetHeartBeatTimeout()
@@ -413,13 +450,20 @@ func (rf *Raft) HeartBeatMonitor() {
 
 // leader send heartBeat to every follower
 func (rf *Raft) sendHeartBeat() {
+	rf.mu.Lock()
+	oldTerm := rf.currentTerm
+	rf.mu.Unlock()
+
 	for i, _ := range rf.peers {
 		if i == rf.me {
 			continue
 		}
 		go func(i int) {
-			args := AppendEntryArgs{Term: rf.currentTerm, LeaderId: rf.me} //todo 2B need more
+			rf.mu.Lock()
+			args := AppendEntryArgs{Term: oldTerm, LeaderId: rf.me} //todo 2B need more
 			reply := AppendEntryReply{0, false}
+			rf.mu.Unlock()
+			//DPrintf("%d sending heartbeat to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.AppendEntry", &args, &reply)
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {

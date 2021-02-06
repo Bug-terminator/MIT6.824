@@ -1,6 +1,27 @@
 Test (2A): initial election ...
+2021/02/05 18:31:24 1 becomes candidate. 0 0
+2021/02/05 18:31:24 0 vote for 1
+2021/02/05 18:31:24 2 vote for 1
+2021/02/05 18:31:24 1 becomes leader. 1 1
   ... Passed --   3.0  3   56   12898    0
 Test (2A): election after network failure ...
-  ... Passed --   7.9  3  174   31822    0
-PASS
-ok  	_/mnt/c/Users/litang/githubWorkSpace/MIT-6.824repo/src/raft	11.919s
+2021/02/05 18:31:27 1 becomes candidate. 0 0
+2021/02/05 18:31:27 2 vote for 1
+2021/02/05 18:31:27 0 vote for 1
+2021/02/05 18:31:27 1 becomes leader. 1 1
+2021/02/05 18:31:27 2 becomes candidate. 1 0
+2021/02/05 18:31:27 0 vote for 2
+2021/02/05 18:31:27 2 becomes leader. 2 1
+2021/02/05 18:31:28 0 becomes candidate. 2 0
+
+
+
+
+2021/02/05 18:31:28 1 becomes candidate. 2 0
+2021/02/05 18:31:35 1 lose election.3 1
+2021/02/05 18:31:35 0 lose election.3 1
+--- FAIL: TestReElection2A (8.60s)
+    config.go:330: expected one leader, got none
+FAIL
+exit status 1
+FAIL	_/mnt/c/Users/litang/githubWorkSpace/MIT-6.824repo/src/raft	11.589s
