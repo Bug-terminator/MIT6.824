@@ -212,7 +212,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			}
 			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail fixme
 				rf.log = append(rf.log, args.Entries...)
-				fmt.Println(rf.currentTerm, " ", rf.log)
+				fmt.Println("follower ", rf.me, " term ", rf.currentTerm, " log ", rf.log)
 				DPrintf("%d add entries %v", rf.me, args.Entries)
 				if args.LeaderCommit > rf.commitIndex { //fixme should be here
 					idx := len(rf.log) - 1
@@ -293,11 +293,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = len(rf.log)
 	term = rf.currentTerm
 	isLeader = rf.state == 2
-	rf.mu.Unlock()
 	if isLeader {
 		rf.log = append(rf.log, LogEntry{command, term})
-		fmt.Println(rf.currentTerm, " ", rf.log)
+		fmt.Println("leader ", rf.me, " term ", rf.currentTerm, " log ", rf.log)
+
 	}
+	rf.mu.Unlock()
 	return index, term, isLeader
 }
 
@@ -347,8 +348,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = 0
 	rf.lastVisited = time.Now().UnixNano() / 1e6
 	rf.electionTimeout = RandomTimeGenerator()
-	go rf.HeartBeatMonitor()
-	go rf.ReElectionMonitor()
+
 	//2B
 	rf.log = make([]LogEntry, 1)
 	rf.log[0] = LogEntry{nil, 0} //dummy element
@@ -356,6 +356,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+	go rf.HeartBeatMonitor()
+	go rf.ReElectionMonitor()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -469,7 +471,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			rf.ResetHeartBeatTimeout()
 			oldTerm := rf.currentTerm
 			//oldRf := *rf
-			rf.sendHeartBeat( /*oldRf*/ oldTerm)
+			go rf.sendHeartBeat( /*oldRf*/ oldTerm)
 		} else {
 			DPrintf("%d lose election %d", rf.me, rf.currentTerm)
 		}
@@ -501,7 +503,7 @@ func (rf *Raft) HeartBeatMonitor() {
 			//oldRf := *rf
 			rf.ResetHeartBeatTimeout()
 			rf.mu.Unlock()
-			rf.sendHeartBeat( /*oldRf*/ oldTerm) //don't use goroutine do this job
+			go rf.sendHeartBeat( /*oldRf*/ oldTerm) //don't use goroutine do this job fixme
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
@@ -513,7 +515,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 	//concurrency request vote
 	total := len(rf.peers)
 	rec := 0
-	applied, visited := 0, 0
+	applied, visited := 1, 1
 	mu := sync.Mutex{}
 	cond := sync.NewCond(&mu)
 	for i, _ := range rf.peers {
@@ -521,12 +523,18 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			continue
 		}
 		go func(i int) {
+			//fmt.Println(1)
 			rf.mu.Lock()
-			args := AppendEntryArgs{rf.currentTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, rf.log[rf.nextIndex[i]:]} //fixme check twice
-			fmt.Println(args)
+			s := []LogEntry{}
+			if len(rf.log) > rf.nextIndex[i] {
+				s = rf.log[rf.nextIndex[i]:]
+			}
+			//fixme check twice
+			args := AppendEntryArgs{rf.currentTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s} //fixme check twice
+			fmt.Println("args ", args)
 			rf.mu.Unlock()
 			reply := AppendEntryReply{0, false}
-			//DPrintf("%d sending heartbeat to %d\n", rf.me, i)
+			DPrintf("%d sending heartbeat to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.AppendEntry", &args, &reply)
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
@@ -541,13 +549,14 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 				if reply.Success {
 					applied++
 					rf.nextIndex[i] += len(args.Entries)
-					rec = rf.nextIndex[i]
+					rec = rf.nextIndex[i] - 1
 				} else {
 					rf.nextIndex[i]--
 				}
 			}
 			rf.mu.Unlock()
 			visited++
+			DPrintf("log replication: id %d term %d visited %d applied %d\n", rf.me, oldTerm, visited, applied)
 			cond.Signal()
 			mu.Unlock()
 		}(i)
@@ -570,6 +579,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 	rf.mu.Lock()
 	if rf.currentTerm == oldTerm { //conditions haven't been changed since it send heartbeat
 		if applied > total/2 {
+			DPrintf("most applied, leader %d commit %d\n", rf.me, rec)
 			rf.commitIndex = rec
 			for rf.commitIndex > rf.lastApplied {
 				rf.lastApplied++
