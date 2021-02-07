@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -211,6 +212,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			}
 			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail fixme
 				rf.log = append(rf.log, args.Entries...)
+				fmt.Println(rf.currentTerm, " ", rf.log)
 				DPrintf("%d add entries %v", rf.me, args.Entries)
 				if args.LeaderCommit > rf.commitIndex { //fixme should be here
 					idx := len(rf.log) - 1
@@ -294,6 +296,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Unlock()
 	if isLeader {
 		rf.log = append(rf.log, LogEntry{command, term})
+		fmt.Println(rf.currentTerm, " ", rf.log)
 	}
 	return index, term, isLeader
 }
@@ -387,19 +390,21 @@ func (rf *Raft) ReElectionMonitor() {
 			//update related state
 			rf.mu.Lock()
 			oldTerm := rf.currentTerm + 1
+			lastIdx := len(rf.log) - 1
+			lastTerm := rf.log[lastIdx].Term
 			rf.voteFor = rf.me
 			rf.state = 1
 			rf.currentTerm++
 			rf.ResetElectionTimeout()
 			rf.mu.Unlock()
-			go rf.sendRequestVote(oldTerm)
+			go rf.sendRequestVote(oldTerm, lastIdx, lastTerm)
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 //candidate send requestVote to all peers
-func (rf *Raft) sendRequestVote(oldTerm int) {
+func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	DPrintf("%d start a new election. %d\n", rf.me, oldTerm)
 
 	//concurrency request vote
@@ -413,22 +418,20 @@ func (rf *Raft) sendRequestVote(oldTerm int) {
 			continue
 		}
 		go func(i int) {
-			args := RequestVoteArgs{oldTerm, rf.me, 0, 0} //todo lab 2B need more
+			args := RequestVoteArgs{oldTerm, rf.me, lastIdx, lastTerm} //fixme check twice
 			reply := RequestVoteReply{0, false}
 			//DPrintf("%d sending requestVote to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.RequestVote", &args, &reply)
-			mu.Lock()
 			rf.mu.Lock()
 			if reply.Term >= rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.state = 0
 				rf.ResetElectionTimeout()
 				rf.mu.Unlock()
-				cond.Signal()
-				mu.Unlock()
 				return
 			}
 			rf.mu.Unlock()
+			mu.Lock()
 			if reply.VoteGranted {
 				get++
 			}
@@ -457,9 +460,16 @@ func (rf *Raft) sendRequestVote(oldTerm int) {
 		if get > total/2 {
 			DPrintf("%d becomes leader. %d\n", rf.me, rf.currentTerm)
 			rf.state = 2 // become leader
+			//2B
+			length := len(rf.log)
+			for i, _ := range rf.nextIndex {
+				rf.nextIndex[i] = length
+				rf.matchIndex[i] = 0
+			}
 			rf.ResetHeartBeatTimeout()
 			oldTerm := rf.currentTerm
-			go rf.sendHeartBeat(oldTerm)
+			//oldRf := *rf
+			rf.sendHeartBeat( /*oldRf*/ oldTerm)
 		} else {
 			DPrintf("%d lose election %d", rf.me, rf.currentTerm)
 		}
@@ -488,25 +498,34 @@ func (rf *Raft) HeartBeatMonitor() {
 		if succeed {
 			rf.mu.Lock()
 			oldTerm := rf.currentTerm
+			//oldRf := *rf
 			rf.ResetHeartBeatTimeout()
 			rf.mu.Unlock()
-			go rf.sendHeartBeat(oldTerm)
+			rf.sendHeartBeat( /*oldRf*/ oldTerm) //don't use goroutine do this job
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 // leader send heartBeat to every follower
-func (rf *Raft) sendHeartBeat(oldTerm int) {
+func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
+
+	//concurrency request vote
+	total := len(rf.peers)
+	rec := 0
+	applied, visited := 0, 0
+	mu := sync.Mutex{}
+	cond := sync.NewCond(&mu)
 	for i, _ := range rf.peers {
 		if i == rf.me {
 			continue
 		}
 		go func(i int) {
-			//rf.mu.Lock()
-			args := AppendEntryArgs{Term: oldTerm, LeaderId: rf.me} //todo 2B need more
+			rf.mu.Lock()
+			args := AppendEntryArgs{rf.currentTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, rf.log[rf.nextIndex[i]:]} //fixme check twice
+			fmt.Println(args)
+			rf.mu.Unlock()
 			reply := AppendEntryReply{0, false}
-			//rf.mu.Unlock()
 			//DPrintf("%d sending heartbeat to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.AppendEntry", &args, &reply)
 			rf.mu.Lock()
@@ -517,7 +536,47 @@ func (rf *Raft) sendHeartBeat(oldTerm int) {
 				rf.mu.Unlock()
 				return
 			}
+			mu.Lock()
+			if rf.currentTerm == oldTerm { //condition hasn't changed
+				if reply.Success {
+					applied++
+					rf.nextIndex[i] += len(args.Entries)
+					rec = rf.nextIndex[i]
+				} else {
+					rf.nextIndex[i]--
+				}
+			}
 			rf.mu.Unlock()
+			visited++
+			cond.Signal()
+			mu.Unlock()
 		}(i)
 	}
+
+	//count of votes
+	mu.Lock()
+	for applied <= total/2 && visited < total {
+		rf.mu.Lock()
+		if rf.currentTerm != oldTerm {
+			DPrintf("%d appendEntry condition changed,%d return.\n", rf.me, oldTerm)
+			rf.mu.Unlock()
+			mu.Unlock()
+			return
+		}
+		rf.mu.Unlock()
+		cond.Wait()
+	}
+	//DPrintf("%d count vote finish:get %d visited %d", rf.me, get, visited)
+	rf.mu.Lock()
+	if rf.currentTerm == oldTerm { //conditions haven't been changed since it send heartbeat
+		if applied > total/2 {
+			rf.commitIndex = rec
+			for rf.commitIndex > rf.lastApplied {
+				rf.lastApplied++
+				//todo apply to state machine
+			}
+		}
+	}
+	rf.mu.Unlock()
+	mu.Unlock()
 }
