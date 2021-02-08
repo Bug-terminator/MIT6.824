@@ -65,11 +65,12 @@ type Raft struct {
 	lastAE               int64 //the last time leader send AE
 	lastVisited          int64 //the last time that followers were visited(receive a AE(follower) & RV(follower) & reply with a term larger than "me"(candidate))
 	//2B
-	commitIndex int        // index of highest log entry known to be committed
-	lastApplied int        // index of highest log entry applied to state machine
-	nextIndex   []int      //for each server, index of the next log entry to send to that server
-	matchIndex  []int      // for each server, index of highest log entry known to be replicated on server
-	log         []LogEntry //log entries; each entry contains command for state machine, and term when entry was received by leader
+	commitIndex int           // index of highest log entry known to be committed
+	lastApplied int           // index of highest log entry applied to state machine
+	nextIndex   []int         //for each server, index of the next log entry to send to that server
+	matchIndex  []int         // for each server, index of highest log entry known to be replicated on server
+	log         []LogEntry    //log entries; each entry contains command for state machine, and term when entry was received by leader
+	applyCh     chan ApplyMsg //fixme is it right?
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
@@ -153,7 +154,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	//2A
 	rf.mu.Lock()
-	DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
+	//DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
 	if rf.state == 1 {
 		reply.Term = rf.currentTerm - 1
 	} else {
@@ -196,7 +197,7 @@ type AppendEntryReply struct {
 
 // append entry handler
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
-	//2A todo 2B
+	//2A 2B
 	rf.mu.Lock()
 	DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
 	reply.Term = rf.currentTerm
@@ -223,7 +224,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 					}
 					for rf.commitIndex > rf.lastApplied {
 						rf.lastApplied++
-						//todo apply to state machine
+						rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied} //fixme check twice
 					}
 				}
 				reply.Success = true
@@ -288,11 +289,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := -1
 	isLeader := true
 
-	// Your code here (2B).
+	// Your code here (2B).//fixme
 	rf.mu.Lock()
 	index = len(rf.log)
 	term = rf.currentTerm
 	isLeader = rf.state == 2
+
 	if isLeader {
 		rf.log = append(rf.log, LogEntry{command, term})
 		fmt.Println("leader ", rf.me, " term ", rf.currentTerm, " log ", rf.log)
@@ -356,6 +358,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+	rf.applyCh = applyCh
 	go rf.HeartBeatMonitor()
 	go rf.ReElectionMonitor()
 	// initialize from state persisted before a crash
@@ -523,19 +526,18 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			continue
 		}
 		go func(i int) {
-			//fmt.Println(1)
 			rf.mu.Lock()
 			s := []LogEntry{}
 			if len(rf.log) > rf.nextIndex[i] {
 				s = rf.log[rf.nextIndex[i]:]
 			}
 			//fixme check twice
-			args := AppendEntryArgs{rf.currentTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s} //fixme check twice
+			args := AppendEntryArgs{rf.currentTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s}
 			fmt.Println("args ", args)
 			rf.mu.Unlock()
 			reply := AppendEntryReply{0, false}
 			DPrintf("%d sending heartbeat to %d\n", rf.me, i)
-			rf.peers[i].Call("Raft.AppendEntry", &args, &reply)
+			ok := rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
@@ -545,7 +547,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 				return
 			}
 			mu.Lock()
-			if rf.currentTerm == oldTerm { //condition hasn't changed
+			if ok && rf.currentTerm == oldTerm { //condition hasn't changed
 				if reply.Success {
 					applied++
 					rf.nextIndex[i] += len(args.Entries)
@@ -556,7 +558,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			}
 			rf.mu.Unlock()
 			visited++
-			DPrintf("log replication: id %d term %d visited %d applied %d\n", rf.me, oldTerm, visited, applied)
+			//DPrintf("log replication: id %d term %d visited %d applied %d\n", rf.me, oldTerm, visited, applied)
 			cond.Signal()
 			mu.Unlock()
 		}(i)
@@ -579,11 +581,11 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 	rf.mu.Lock()
 	if rf.currentTerm == oldTerm { //conditions haven't been changed since it send heartbeat
 		if applied > total/2 {
-			DPrintf("most applied, leader %d commit %d\n", rf.me, rec)
+			DPrintf("most applied, leader %d commit %d; %d out of %d\n", rf.me, rec, applied, total)
 			rf.commitIndex = rec
 			for rf.commitIndex > rf.lastApplied {
 				rf.lastApplied++
-				//todo apply to state machine
+				rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied} //fixme check twice
 			}
 		}
 	}
