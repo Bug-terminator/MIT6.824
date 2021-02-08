@@ -154,7 +154,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	//2A
 	rf.mu.Lock()
-	//DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
+	DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
 	if rf.state == 1 {
 		reply.Term = rf.currentTerm - 1
 	} else {
@@ -199,7 +199,7 @@ type AppendEntryReply struct {
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	//2A 2B
 	rf.mu.Lock()
-	DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
+	//DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
 		rf.state = 0
@@ -214,7 +214,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail fixme
 				rf.log = append(rf.log, args.Entries...)
 				fmt.Println("follower ", rf.me, " term ", rf.currentTerm, " log ", rf.log)
-				DPrintf("%d add entries %v", rf.me, args.Entries)
+				//DPrintf("%d add entries %v", rf.me, args.Entries)
 				if args.LeaderCommit > rf.commitIndex { //fixme should be here
 					idx := len(rf.log) - 1
 					if idx < args.LeaderCommit {
@@ -413,6 +413,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	DPrintf("%d start a new election. %d\n", rf.me, oldTerm)
 
 	//concurrency request vote
+	timeNow := time.Now().Format("2006-01-02 15:04:05")
 	total := len(rf.peers)
 	get, visited := 1, 1 //vote for itself
 	mu := sync.Mutex{}
@@ -451,7 +452,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	for get <= total/2 && visited < total {
 		rf.mu.Lock()
 		if rf.currentTerm != oldTerm || rf.state != 1 {
-			DPrintf("%d election condition changed,%d return.\n", rf.me, oldTerm)
+			DPrintf("%d election condition changed,%d return. %s\n", rf.me, oldTerm, timeNow)
 			rf.mu.Unlock()
 			mu.Unlock()
 			return
@@ -473,10 +474,9 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			}
 			rf.ResetHeartBeatTimeout()
 			oldTerm := rf.currentTerm
-			//oldRf := *rf
 			go rf.sendHeartBeat( /*oldRf*/ oldTerm)
 		} else {
-			DPrintf("%d lose election %d", rf.me, rf.currentTerm)
+			DPrintf("%d lose election %d %s", rf.me, rf.currentTerm, timeNow)
 		}
 	}
 	rf.mu.Unlock()
@@ -506,7 +506,7 @@ func (rf *Raft) HeartBeatMonitor() {
 			//oldRf := *rf
 			rf.ResetHeartBeatTimeout()
 			rf.mu.Unlock()
-			go rf.sendHeartBeat( /*oldRf*/ oldTerm) //don't use goroutine do this job fixme
+			go rf.sendHeartBeat( /*oldRf*/ oldTerm) //must use goroutine to avoid live lock fixme
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
@@ -516,6 +516,7 @@ func (rf *Raft) HeartBeatMonitor() {
 func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 
 	//concurrency request vote
+	timeNow := time.Now().Format("2006-01-02 15:04:05")
 	total := len(rf.peers)
 	rec := 0
 	applied, visited := 1, 1
@@ -533,10 +534,10 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			}
 			//fixme check twice
 			args := AppendEntryArgs{rf.currentTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s}
-			fmt.Println("args ", args)
+			//fmt.Println("args ", args)
 			rf.mu.Unlock()
 			reply := AppendEntryReply{0, false}
-			DPrintf("%d sending heartbeat to %d\n", rf.me, i)
+			DPrintf("%d sending heartbeat to %d, %+v\n", rf.me, i, args)
 			ok := rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
@@ -569,7 +570,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 	for applied <= total/2 && visited < total {
 		rf.mu.Lock()
 		if rf.currentTerm != oldTerm {
-			DPrintf("%d appendEntry condition changed,%d return.\n", rf.me, oldTerm)
+			DPrintf("%d appendEntry condition changed,%d return.%s\n", rf.me, oldTerm, timeNow)
 			rf.mu.Unlock()
 			mu.Unlock()
 			return
@@ -581,7 +582,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 	rf.mu.Lock()
 	if rf.currentTerm == oldTerm { //conditions haven't been changed since it send heartbeat
 		if applied > total/2 {
-			DPrintf("most applied, leader %d commit %d; %d out of %d\n", rf.me, rec, applied, total)
+			DPrintf("most applied, leader %d commit %d; %d out of %d %s\n", rf.me, rec, applied, total, timeNow)
 			rf.commitIndex = rec
 			for rf.commitIndex > rf.lastApplied {
 				rf.lastApplied++
