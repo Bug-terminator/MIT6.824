@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -154,21 +155,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//2A
 	rf.mu.Lock()
 	DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
-	if rf.state == 1 {
-		reply.Term = rf.currentTerm - 1
-	} else {
-		reply.Term = rf.currentTerm
-	}
+	reply.Term = rf.currentTerm
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.state = 0
-		rf.ResetElectionTimeout()
 		//2B
 		lastIdx := len(rf.log) - 1
 		lastTerm := rf.log[lastIdx].Term
 		//candidate’s log is at least as up-to-date as receiver’s log, grant vote
 		if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIdx <= args.LastLogIndex) {
 			reply.VoteGranted = true
+			rf.ResetElectionTimeout()
 			rf.voteFor = args.CandidateID
 			DPrintf("%d vote for %d", rf.me, args.CandidateID)
 		}
@@ -207,12 +204,16 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 		//2B
 		if len(rf.log) > args.PrevLogIndex { //index exist
 			//shrink,in order to use append()
+			//fixme If the follower has all the entries the leader sent, the follower MUST NOT truncate
+			//its log. Any elements following the entries sent by the leader MUST be kept. This is because
+			//we could be receiving an outdated AppendEntries RPC from the leader, and truncating the log would
+			//mean “taking back” entries that we may have already told the leader that we have in our log.
 			if len(rf.log) > args.PrevLogIndex+1 {
 				rf.log = rf.log[:args.PrevLogIndex+1]
 			}
 			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail
 				rf.log = append(rf.log, args.Entries...)
-				//fmt.Println("follower ", rf.me, " term ", rf.currentTerm, " log ", rf.log)
+				fmt.Println("follower ", rf.me, " term ", rf.currentTerm, " log", len(rf.log), " ", rf.log)
 				//DPrintf("%d add entries %v", rf.me, args.Entries)
 				if args.LeaderCommit > rf.commitIndex {
 					idx := len(rf.log) - 1
@@ -296,8 +297,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	if isLeader {
 		rf.log = append(rf.log, LogEntry{command, term})
-		//fmt.Println("leader ", rf.me, " term ", rf.currentTerm, " log ", rf.log)
-
+		fmt.Println("leader ", rf.me, " term ", rf.currentTerm, " log", len(rf.log), rf.log)
 	}
 	rf.mu.Unlock()
 	return index, term, isLeader
@@ -385,14 +385,11 @@ func (rf *Raft) ResetHeartBeatTimeout() {
 // check if election timeout have been reached,frequency = 1 times/1 ms
 func (rf *Raft) ReElectionMonitor() {
 	for !rf.killed() {
-		timeNow := time.Now().UnixNano() / 1e6 //ms
 		rf.mu.Lock()
+		timeNow := time.Now().UnixNano() / 1e6 //ms
 		limit := rf.lastVisited + rf.electionTimeout
-		var suceed bool = (limit <= timeNow && rf.state != 2)
-		rf.mu.Unlock()
-		if suceed {
+		if limit <= timeNow && rf.state != 2 {
 			//update related state
-			rf.mu.Lock()
 			oldTerm := rf.currentTerm + 1
 			lastIdx := len(rf.log) - 1
 			lastTerm := rf.log[lastIdx].Term
@@ -400,11 +397,12 @@ func (rf *Raft) ReElectionMonitor() {
 			rf.state = 1
 			rf.currentTerm++
 			rf.ResetElectionTimeout()
-			rf.mu.Unlock()
 			go rf.sendRequestVote(oldTerm, lastIdx, lastTerm)
 		}
+		rf.mu.Unlock()
 		time.Sleep(1 * time.Millisecond)
 	}
+	DPrintf("%d was killed,stop\n", rf.me)
 }
 
 //candidate send requestVote to all peers
@@ -412,7 +410,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	DPrintf("%d start a new election. %d\n", rf.me, oldTerm)
 
 	//concurrency request vote
-	timeNow := time.Now().Format("2006-01-02 15:04:05")
+	timeNow := time.Now().Format("2006-01-02 15:04:05") //debug usage
 	total := len(rf.peers)
 	get, visited := 1, 1 //vote for itself
 	mu := sync.Mutex{}
@@ -427,13 +425,14 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			reply := RequestVoteReply{0, false}
 			//DPrintf("%d sending requestVote to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.RequestVote", &args, &reply)
+
 			rf.mu.Lock()
-			if reply.Term >= rf.currentTerm {
+			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.state = 0
-				rf.ResetElectionTimeout()
-				rf.mu.Unlock()
-				return
+				//don't do this:
+				//rf.mu.Unlock()
+				//return
 			}
 			rf.mu.Unlock()
 			mu.Lock()
@@ -441,7 +440,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 				get++
 			}
 			visited++
-			cond.Signal()
+			cond.Broadcast()
 			mu.Unlock()
 		}(i)
 	}
@@ -449,19 +448,11 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	//count of votes
 	mu.Lock()
 	for get <= total/2 && visited < total {
-		//rf.mu.Lock()
-		//if rf.currentTerm != oldTerm || rf.state != 1 {
-		//	DPrintf("%d election condition changed,%d return. %s\n", rf.me, oldTerm, timeNow)
-		//	rf.mu.Unlock()
-		//	mu.Unlock()
-		//	return
-		//}
-		//rf.mu.Unlock()fixme
 		cond.Wait()
 	}
 	//DPrintf("%d count vote finish:get %d visited %d", rf.me, get, visited)
 	rf.mu.Lock()
-	if rf.state == 1 && rf.currentTerm == oldTerm { //conditions haven't been changed since it decide to be a candidate
+	if rf.state == 1 && rf.currentTerm == oldTerm { //conditions haven't changed since it decide to be a candidate
 		if get > total/2 {
 			DPrintf("%d becomes leader. %d\n", rf.me, rf.currentTerm)
 			rf.state = 2 // become leader
@@ -473,7 +464,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			}
 			rf.ResetHeartBeatTimeout()
 			oldTerm := rf.currentTerm
-			go rf.sendHeartBeat( /*oldRf*/ oldTerm)
+			go rf.sendHeartBeat(oldTerm)
 		} else {
 			DPrintf("%d lose election %d %s", rf.me, rf.currentTerm, timeNow)
 		}
@@ -482,38 +473,36 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	mu.Unlock()
 }
 
-// todo check that rf.currentTerm hasn't changed since the decision to become a candidate.
-func (rf *Raft) NotChanged() bool {
-	//ct := atomic.LoadInt32(&rf.currentTerm)
-	rf.mu.Lock()
-	ret := (rf.state == 1)
-	rf.mu.Unlock()
-	return ret
-}
+//check that rf.currentTerm hasn't changed since the decision to become a candidate.
+//func (rf *Raft) NotChanged() bool {
+//	//ct := atomic.LoadInt32(&rf.currentTerm)
+//	rf.mu.Lock()
+//	ret := (rf.state == 1)
+//	rf.mu.Unlock()
+//	return ret
+//}
 
 //check if heartBeat timeout have been reached
-func (rf *Raft) HeartBeatMonitor() {
+func (rf *Raft) HeartBeatMonitor() { //todo improve use for-select rewrite this function
 	for !rf.killed() {
 		rf.mu.Lock()
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		limit := rf.lastAE + rf.heartbeatTimeout
-		var succeed bool = (limit <= timeNow && rf.state == 2)
-		rf.mu.Unlock() // don't call time-consuming function with lock held
-		if succeed {
-			rf.mu.Lock()
+		if limit <= timeNow && rf.state == 2 {
 			oldTerm := rf.currentTerm
 			rf.ResetHeartBeatTimeout()
-			rf.mu.Unlock()
-			go rf.sendHeartBeat( /*oldRf*/ oldTerm) //must use goroutine to avoid live lock
+			go rf.sendHeartBeat(oldTerm) //must use goroutine to avoid live lock
 		}
+		rf.mu.Unlock()
 		time.Sleep(1 * time.Millisecond)
 	}
+	DPrintf("%d was killed,stop\n", rf.me)
 }
 
 // leader send heartBeat to every follower
 func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
+	DPrintf("%d start a heartbeat. %d\n", rf.me, oldTerm)
 
-	//concurrency request vote
 	timeNow := time.Now().Format("2006-01-02 15:04:05")
 	total := len(rf.peers)
 	rec := 0
@@ -541,9 +530,6 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.state = 0
-				rf.ResetElectionTimeout()
-				rf.mu.Unlock()
-				return
 			}
 			mu.Lock()
 			if ok && rf.currentTerm == oldTerm { //condition hasn't changed
@@ -555,36 +541,30 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 					rf.nextIndex[i]--
 				}
 			}
-			rf.mu.Unlock()
 			visited++
 			//DPrintf("log replication: id %d term %d visited %d applied %d\n", rf.me, oldTerm, visited, applied)
-			cond.Signal()
+			cond.Broadcast()
 			mu.Unlock()
+			rf.mu.Unlock()
+
 		}(i)
 	}
 
-	//count of votes
+	//count of applied
 	mu.Lock()
 	for applied <= total/2 && visited < total {
-		//rf.mu.Lock()
-		//if rf.currentTerm != oldTerm {
-		//	DPrintf("%d appendEntry condition changed,%d return.%s\n", rf.me, oldTerm, timeNow)
-		//	rf.mu.Unlock()
-		//	mu.Unlock()
-		//	return
-		//}
-		//rf.mu.Unlock()fixme
 		cond.Wait()
 	}
-	//DPrintf("%d count vote finish:get %d visited %d", rf.me, get, visited)
 	rf.mu.Lock()
 	if rf.currentTerm == oldTerm { //conditions haven't been changed since it send heartbeat
 		if applied > total/2 {
 			DPrintf("most applied, leader %d commit %d; %d out of %d %s\n", rf.me, rec, applied, total, timeNow)
-			rf.commitIndex = rec
-			for rf.commitIndex > rf.lastApplied {
-				rf.lastApplied++
-				rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied} //fixme check twice
+			if rec > rf.commitIndex {
+				rf.commitIndex = rec
+				for rf.commitIndex > rf.lastApplied {
+					rf.lastApplied++
+					rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
+				}
 			}
 		}
 	}
