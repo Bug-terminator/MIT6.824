@@ -18,7 +18,7 @@ package raft
 //
 
 import (
-	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -64,6 +64,7 @@ type Raft struct {
 	electionTimeout      int64 // follower election timeout
 	lastAE               int64 //the last time leader send AE
 	lastVisited          int64 //the last time that followers were visited(receive a AE(follower) & RV(follower) & reply with a term larger than "me"(candidate))
+	allBegin             int64 // the very begining of the program
 	//2B
 	commitIndex int        // index of highest log entry known to be committed
 	lastApplied int        // index of highest log entry applied to state machine
@@ -165,9 +166,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//candidate’s log is at least as up-to-date as receiver’s log, grant vote
 		if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIdx <= args.LastLogIndex) {
 			reply.VoteGranted = true
+			//DPrintf("come from RV")
 			rf.ResetElectionTimeout()
 			rf.voteFor = args.CandidateID
-			DPrintf("%d vote for %d", rf.me, args.CandidateID)
+			DPrintf("===%d vote for %d=====", rf.me, args.CandidateID)
 		}
 	}
 	rf.mu.Unlock()
@@ -192,46 +194,87 @@ type AppendEntryReply struct {
 }
 
 // append entry handler
+//func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
+//	//2A 2B
+//	rf.mu.Lock()
+//	//DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
+//	reply.Term = rf.currentTerm
+//	if args.Term >= rf.currentTerm {
+//		rf.state = 0
+//		rf.currentTerm = args.Term
+//		rf.ResetElectionTimeout()
+//		//2B
+//		if len(rf.log) > args.PrevLogIndex { //index exist
+//			//shrink,in order to use append()
+//			//fixme If the follower has all the entries the leader sent, the follower MUST NOT truncate
+//			//its log. Any elements following the entries sent by the leader MUST be kept. This is because
+//			//we could be receiving an outdated AppendEntries RPC from the leader, and truncating the log would
+//			//mean “taking back” entries that we may have already told the leader that we have in our log.
+//			if len(rf.log) > args.PrevLogIndex+1 {
+//				rf.log = rf.log[:args.PrevLogIndex+1]
+//			}
+//			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail
+//				rf.log = append(rf.log, args.Entries...)
+//				//fmt.Println("follower ", rf.me, " term ", rf.currentTerm, " log", len(rf.log), " ", rf.log)
+//				//DPrintf("%d add entries %v", rf.me, args.Entries)
+//				if args.LeaderCommit > rf.commitIndex {
+//					idx := len(rf.log) - 1
+//					if idx < args.LeaderCommit {
+//						rf.commitIndex = idx
+//					} else {
+//						rf.commitIndex = args.LeaderCommit
+//					}
+//					for rf.commitIndex > rf.lastApplied {
+//						rf.lastApplied++
+//						rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
+//					}
+//				}
+//				reply.Success = true
+//			} else { //doesn't match
+//				rf.log = rf.log[:len(rf.log)-1] //erase last element
+//			}
+//		}
+//	}
+//	rf.mu.Unlock()
+//}
+
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	//2A 2B
 	rf.mu.Lock()
-	//DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
+	DPrintf("%d recieved heartbeat from %d %d\n ", rf.me, args.LeaderId, time.Now().UnixNano()/1e6)
+
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
-		rf.state = 0
 		rf.currentTerm = args.Term
+		rf.state = 0
 		rf.ResetElectionTimeout()
-		//2B
-		if len(rf.log) > args.PrevLogIndex { //index exist
-			//shrink,in order to use append()
-			//fixme If the follower has all the entries the leader sent, the follower MUST NOT truncate
-			//its log. Any elements following the entries sent by the leader MUST be kept. This is because
-			//we could be receiving an outdated AppendEntries RPC from the leader, and truncating the log would
-			//mean “taking back” entries that we may have already told the leader that we have in our log.
-			if len(rf.log) > args.PrevLogIndex+1 {
-				rf.log = rf.log[:args.PrevLogIndex+1]
-			}
-			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail
-				rf.log = append(rf.log, args.Entries...)
-				fmt.Println("follower ", rf.me, " term ", rf.currentTerm, " log", len(rf.log), " ", rf.log)
-				//DPrintf("%d add entries %v", rf.me, args.Entries)
-				if args.LeaderCommit > rf.commitIndex {
-					idx := len(rf.log) - 1
-					if idx < args.LeaderCommit {
-						rf.commitIndex = idx
-					} else {
-						rf.commitIndex = args.LeaderCommit
-					}
-					for rf.commitIndex > rf.lastApplied {
-						rf.lastApplied++
-						rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
-					}
-				}
-				reply.Success = true
-			} else { //doesn't match
-				rf.log = rf.log[:len(rf.log)-1] //erase last element
+
+		if len(rf.log) <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+			rf.mu.Unlock()
+			return
+		}
+		reply.Success = true
+
+		iter := args.PrevLogIndex + 1
+		for i, entry := range args.Entries {
+			if len(rf.log) <= iter || rf.log[iter].Term != entry.Term {
+				rf.log = rf.log[:iter]
+				rf.log = append(rf.log, args.Entries[i:]...)
+				break
+			} else {
+				iter++
 			}
 		}
+
+		if args.LeaderCommit > rf.commitIndex {
+			rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
+			for rf.commitIndex > rf.lastApplied {
+				rf.lastApplied++
+				rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
+			}
+		}
+
+		DPrintf("follower %d term %d loglength %d commit %d", rf.me, rf.currentTerm, len(rf.log), rf.commitIndex)
 	}
 	rf.mu.Unlock()
 }
@@ -269,6 +312,20 @@ func (rf *Raft) sendRequestVote1(server int, args *RequestVoteArgs, reply *Reque
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
+func min(a int, b int) int {
+	if a > b {
+		return b
+	} else {
+		return a
+	}
+}
+func max(a int, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
 
 //
 //the service using Raft (e.g. a k/v server) wants to start
@@ -297,7 +354,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	if isLeader {
 		rf.log = append(rf.log, LogEntry{command, term})
-		fmt.Println("leader ", rf.me, " term ", rf.currentTerm, " log", len(rf.log), rf.log)
 	}
 	rf.mu.Unlock()
 	return index, term, isLeader
@@ -347,9 +403,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.heartbeatTimeout = 100
 	rf.currentTerm = 0
 	rf.state = 0
-	rf.lastVisited = time.Now().UnixNano() / 1e6
-	rf.electionTimeout = RandomTimeGenerator()
-
+	rf.ResetElectionTimeout()
+	rf.allBegin = rf.lastVisited
 	//2B
 	rf.log = make([]LogEntry, 1)
 	rf.log[0] = LogEntry{nil, 0} //dummy element
@@ -368,7 +423,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 //request vote random timeout generator,range: [200,400)
 func RandomTimeGenerator() int64 {
-	rd := rand.New(rand.NewSource(time.Now().UnixNano())).Int63n(200) + 200
+	rd := rand.New(rand.NewSource(time.Now().UnixNano())).Int63n(500) + 150
 	return rd
 }
 
@@ -376,6 +431,7 @@ func RandomTimeGenerator() int64 {
 func (rf *Raft) ResetElectionTimeout() {
 	rf.lastVisited = time.Now().UnixNano() / 1e6
 	rf.electionTimeout = RandomTimeGenerator()
+	DPrintf("%d next election :%d", rf.me, rf.lastVisited+rf.electionTimeout)
 }
 
 func (rf *Raft) ResetHeartBeatTimeout() {
@@ -384,7 +440,12 @@ func (rf *Raft) ResetHeartBeatTimeout() {
 
 // check if election timeout have been reached,frequency = 1 times/1 ms
 func (rf *Raft) ReElectionMonitor() {
+	i := 0
 	for !rf.killed() {
+		i++
+		if i%500 == 0 { //debug
+			DPrintf("=====%d still alive!=====", rf.me)
+		}
 		rf.mu.Lock()
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		limit := rf.lastVisited + rf.electionTimeout
@@ -402,15 +463,14 @@ func (rf *Raft) ReElectionMonitor() {
 		rf.mu.Unlock()
 		time.Sleep(1 * time.Millisecond)
 	}
-	DPrintf("%d was killed,stop\n", rf.me)
+	MyDPrintf(*rf,"shut down!")
 }
 
 //candidate send requestVote to all peers
 func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
-	DPrintf("%d start a new election. %d\n", rf.me, oldTerm)
+	DPrintf("%d start a new election. %d %d\n", rf.me, oldTerm, time.Now().UnixNano()/1e6)
 
 	//concurrency request vote
-	timeNow := time.Now().Format("2006-01-02 15:04:05") //debug usage
 	total := len(rf.peers)
 	get, visited := 1, 1 //vote for itself
 	mu := sync.Mutex{}
@@ -454,7 +514,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	rf.mu.Lock()
 	if rf.state == 1 && rf.currentTerm == oldTerm { //conditions haven't changed since it decide to be a candidate
 		if get > total/2 {
-			DPrintf("%d becomes leader. %d\n", rf.me, rf.currentTerm)
+			DPrintf("================%d becomes leader. %d==================\n", rf.me, rf.currentTerm)
 			rf.state = 2 // become leader
 			//2B
 			length := len(rf.log)
@@ -463,10 +523,9 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 				rf.matchIndex[i] = 0
 			}
 			rf.ResetHeartBeatTimeout()
-			oldTerm := rf.currentTerm
 			go rf.sendHeartBeat(oldTerm)
 		} else {
-			DPrintf("%d lose election %d %s", rf.me, rf.currentTerm, timeNow)
+			DPrintf("%d lose election %d ", rf.me, rf.currentTerm)
 		}
 	}
 	rf.mu.Unlock()
@@ -496,16 +555,15 @@ func (rf *Raft) HeartBeatMonitor() { //todo improve use for-select rewrite this 
 		rf.mu.Unlock()
 		time.Sleep(1 * time.Millisecond)
 	}
-	DPrintf("%d was killed,stop\n", rf.me)
+	MyDPrintf(*rf,"shut down!")
 }
 
 // leader send heartBeat to every follower
 func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
-	DPrintf("%d start a heartbeat. %d\n", rf.me, oldTerm)
 
-	timeNow := time.Now().Format("2006-01-02 15:04:05")
+	DPrintf("%d start a heartbeat. %d %d\n", rf.me, oldTerm, time.Now().UnixNano()/1e6)
 	total := len(rf.peers)
-	rec := 0
+	rec := math.MaxInt32
 	applied, visited := 1, 1
 	mu := sync.Mutex{}
 	cond := sync.NewCond(&mu)
@@ -520,29 +578,38 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 				s = rf.log[rf.nextIndex[i]:]
 			}
 			//fixme check twice
-			args := AppendEntryArgs{rf.currentTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s}
-			//fmt.Println("args ", args)
+			currTerm := rf.currentTerm
+			ok := false
+			args := AppendEntryArgs{oldTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s}
 			rf.mu.Unlock()
 			reply := AppendEntryReply{0, false}
-			//DPrintf("%d sending heartbeat to %d, %+v\n", rf.me, i, args)
-			ok := rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
+			//DPrintf("%d sending heartbeat to %d %d\n ", rf.me, i, time.Now().UnixNano()/1e6)
+			if currTerm == oldTerm {
+				ok = rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
+			}
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.state = 0
 			}
 			mu.Lock()
-			if ok && rf.currentTerm == oldTerm { //condition hasn't changed
+			if ok && rf.currentTerm == oldTerm && rf.state == 2 { //condition hasn't changed
 				if reply.Success {
 					applied++
-					rf.nextIndex[i] += len(args.Entries)
-					rec = rf.nextIndex[i] - 1
+					//rf.nextIndex[i] += len(args.Entries)
+					//rf.matchIndex[i] = rf.nextIndex[i] - 1
+					// update nextIndex and matchIndex  should use previous args' value !!!!max is to prevent downgrading nextIndex from an out-dated reply
+					rf.nextIndex[i] = max(args.PrevLogIndex+len(args.Entries)+1, rf.nextIndex[i])
+					rf.matchIndex[i] = max(args.PrevLogIndex+len(args.Entries), rf.matchIndex[i])
+					rec = min(rf.matchIndex[i], rec) //fixme
 				} else {
-					rf.nextIndex[i]--
+					if args.PrevLogIndex == rf.nextIndex[i] - 1{
+						rf.nextIndex[i]--
+					}
 				}
 			}
+
 			visited++
-			//DPrintf("log replication: id %d term %d visited %d applied %d\n", rf.me, oldTerm, visited, applied)
 			cond.Broadcast()
 			mu.Unlock()
 			rf.mu.Unlock()
@@ -556,15 +623,16 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 		cond.Wait()
 	}
 	rf.mu.Lock()
-	if rf.currentTerm == oldTerm { //conditions haven't been changed since it send heartbeat
+	if rf.currentTerm == oldTerm && rf.state == 2 { //conditions haven't been changed since it send heartbeat
 		if applied > total/2 {
-			DPrintf("most applied, leader %d commit %d; %d out of %d %s\n", rf.me, rec, applied, total, timeNow)
-			if rec > rf.commitIndex {
+			if rec > rf.commitIndex && rf.log[rec].Term == rf.currentTerm {
 				rf.commitIndex = rec
 				for rf.commitIndex > rf.lastApplied {
 					rf.lastApplied++
 					rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
 				}
+				DPrintf("most applied, leader %d commit %d; %d out of %d %d\n", rf.me, rec, applied, total, time.Now().UnixNano()/1e6)
+				//DPrintf("leader %d term %d loglength %d commit %d", rf.me, rf.currentTerm, len(rf.log), rf.commitIndex)
 			}
 		}
 	}

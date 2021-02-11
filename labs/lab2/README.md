@@ -285,3 +285,5 @@ ok  	_/mnt/c/Users/litang/githubWorkSpace/MIT-6.824repo/src/raft	11.919s
    Make sure you reset your election timer *exactly* when Figure 2 says you should. Specifically, you should *only* restart your election timer if a) you get an `AppendEntries` RPC from the *current* leader (i.e., if the term in the `AppendEntries` arguments is outdated, you should *not* reset your timer); b) you are starting an election; or c) you *grant* a vote to another peer.(Instead of receive a requestVote RPC,important!Because the RPC may come from a node whose log is out-dated.This may not cause a live lock,but will greatly reduce the performance of the system)
    
 9. If a leader sends out an `AppendEntries` RPC, and it is rejected, but *not because of log inconsistency* (this can only happen if our term has passed), then you should immediately step down, and *not* update `nextIndex`. If you do, you could race with the resetting of `nextIndex` if you are re-elected immediately.
+
+10. candidate和leader在真正异步发送RPC之前也需要再次检测自己的角色状态是否正确，否则如果自己刚被其他机器的RPC更新了更高的term，然后自己异步像其他机器发送`AppendEntries`的时候，传过去的term就会是更新过的更大的值，然后机器的log被错误更新 (这是一个超大、超难发现的坑)
