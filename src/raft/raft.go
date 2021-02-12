@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"bytes"
+	"labgob"
 	"math"
 	"math/rand"
 	"sync"
@@ -105,6 +107,12 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -127,6 +135,17 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currTerm int
+	var log []LogEntry
+	if d.Decode(&currTerm) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("decode error")
+	} else {
+		rf.currentTerm = currTerm
+		rf.log = log
+	}
 }
 
 //
@@ -153,9 +172,8 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	//2A
 	rf.mu.Lock()
-	DPrintf("%d received requestVote from %d, %d %d\n", rf.me, args.CandidateID, args.Term, rf.currentTerm)
+	rf.DPrintf("receive RV")
 	reply.Term = rf.currentTerm
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
@@ -166,10 +184,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//candidate’s log is at least as up-to-date as receiver’s log, grant vote
 		if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIdx <= args.LastLogIndex) {
 			reply.VoteGranted = true
-			//DPrintf("come from RV")
 			rf.ResetElectionTimeout()
 			rf.voteFor = args.CandidateID
-			DPrintf("===%d vote for %d=====", rf.me, args.CandidateID)
 		}
 	}
 	rf.mu.Unlock()
@@ -193,56 +209,11 @@ type AppendEntryReply struct {
 	Success bool
 }
 
-// append entry handler
-//func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
-//	//2A 2B
-//	rf.mu.Lock()
-//	//DPrintf("%d received heartbeat from %d, %d %d\n", rf.me, args.LeaderId, args.Term, rf.currentTerm)
-//	reply.Term = rf.currentTerm
-//	if args.Term >= rf.currentTerm {
-//		rf.state = 0
-//		rf.currentTerm = args.Term
-//		rf.ResetElectionTimeout()
-//		//2B
-//		if len(rf.log) > args.PrevLogIndex { //index exist
-//			//shrink,in order to use append()
-//			//fixme If the follower has all the entries the leader sent, the follower MUST NOT truncate
-//			//its log. Any elements following the entries sent by the leader MUST be kept. This is because
-//			//we could be receiving an outdated AppendEntries RPC from the leader, and truncating the log would
-//			//mean “taking back” entries that we may have already told the leader that we have in our log.
-//			if len(rf.log) > args.PrevLogIndex+1 {
-//				rf.log = rf.log[:args.PrevLogIndex+1]
-//			}
-//			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm { //match,append entries to tail
-//				rf.log = append(rf.log, args.Entries...)
-//				//fmt.Println("follower ", rf.me, " term ", rf.currentTerm, " log", len(rf.log), " ", rf.log)
-//				//DPrintf("%d add entries %v", rf.me, args.Entries)
-//				if args.LeaderCommit > rf.commitIndex {
-//					idx := len(rf.log) - 1
-//					if idx < args.LeaderCommit {
-//						rf.commitIndex = idx
-//					} else {
-//						rf.commitIndex = args.LeaderCommit
-//					}
-//					for rf.commitIndex > rf.lastApplied {
-//						rf.lastApplied++
-//						rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
-//					}
-//				}
-//				reply.Success = true
-//			} else { //doesn't match
-//				rf.log = rf.log[:len(rf.log)-1] //erase last element
-//			}
-//		}
-//	}
-//	rf.mu.Unlock()
-//}
-
+//AppendEntry handler
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	//2A 2B
 	rf.mu.Lock()
-	DPrintf("%d recieved heartbeat from %d %d\n ", rf.me, args.LeaderId, time.Now().UnixNano()/1e6)
-
+	rf.DPrintf("receive AE")
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
 		rf.currentTerm = args.Term
@@ -273,8 +244,6 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 				rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
 			}
 		}
-
-		DPrintf("follower %d term %d loglength %d commit %d", rf.me, rf.currentTerm, len(rf.log), rf.commitIndex)
 	}
 	rf.mu.Unlock()
 }
@@ -431,7 +400,6 @@ func RandomTimeGenerator() int64 {
 func (rf *Raft) ResetElectionTimeout() {
 	rf.lastVisited = time.Now().UnixNano() / 1e6
 	rf.electionTimeout = RandomTimeGenerator()
-	DPrintf("%d next election :%d", rf.me, rf.lastVisited+rf.electionTimeout)
 }
 
 func (rf *Raft) ResetHeartBeatTimeout() {
@@ -442,15 +410,14 @@ func (rf *Raft) ResetHeartBeatTimeout() {
 func (rf *Raft) ReElectionMonitor() {
 	i := 0
 	for !rf.killed() {
+		rf.mu.Lock()
 		i++
 		if i%500 == 0 { //debug
-			DPrintf("=====%d still alive!=====", rf.me)
+			rf.DPrintf("alive")
 		}
-		rf.mu.Lock()
 		timeNow := time.Now().UnixNano() / 1e6 //ms
 		limit := rf.lastVisited + rf.electionTimeout
 		if limit <= timeNow && rf.state != 2 {
-			//update related state
 			oldTerm := rf.currentTerm + 1
 			lastIdx := len(rf.log) - 1
 			lastTerm := rf.log[lastIdx].Term
@@ -463,13 +430,16 @@ func (rf *Raft) ReElectionMonitor() {
 		rf.mu.Unlock()
 		time.Sleep(1 * time.Millisecond)
 	}
-	MyDPrintf(*rf,"shut down!")
+	rf.mu.Lock()
+	rf.DPrintf("dead")
+	rf.mu.Unlock()
 }
 
 //candidate send requestVote to all peers
 func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
-	DPrintf("%d start a new election. %d %d\n", rf.me, oldTerm, time.Now().UnixNano()/1e6)
-
+	rf.mu.Lock()
+	rf.DPrintf("send RVs")
+	rf.mu.Unlock()
 	//concurrency request vote
 	total := len(rf.peers)
 	get, visited := 1, 1 //vote for itself
@@ -483,7 +453,6 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 		go func(i int) {
 			args := RequestVoteArgs{oldTerm, rf.me, lastIdx, lastTerm}
 			reply := RequestVoteReply{0, false}
-			//DPrintf("%d sending requestVote to %d\n", rf.me, i)
 			rf.peers[i].Call("Raft.RequestVote", &args, &reply)
 
 			rf.mu.Lock()
@@ -505,27 +474,20 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 		}(i)
 	}
 
-	//count of votes
 	mu.Lock()
 	for get <= total/2 && visited < total {
 		cond.Wait()
 	}
-	//DPrintf("%d count vote finish:get %d visited %d", rf.me, get, visited)
 	rf.mu.Lock()
 	if rf.state == 1 && rf.currentTerm == oldTerm { //conditions haven't changed since it decide to be a candidate
 		if get > total/2 {
-			DPrintf("================%d becomes leader. %d==================\n", rf.me, rf.currentTerm)
-			rf.state = 2 // become leader
-			//2B
-			length := len(rf.log)
+			rf.state = 2
 			for i, _ := range rf.nextIndex {
-				rf.nextIndex[i] = length
+				rf.nextIndex[i] = lastIdx + 1
 				rf.matchIndex[i] = 0
 			}
 			rf.ResetHeartBeatTimeout()
 			go rf.sendHeartBeat(oldTerm)
-		} else {
-			DPrintf("%d lose election %d ", rf.me, rf.currentTerm)
 		}
 	}
 	rf.mu.Unlock()
@@ -555,13 +517,14 @@ func (rf *Raft) HeartBeatMonitor() { //todo improve use for-select rewrite this 
 		rf.mu.Unlock()
 		time.Sleep(1 * time.Millisecond)
 	}
-	MyDPrintf(*rf,"shut down!")
+
 }
 
 // leader send heartBeat to every follower
 func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
-
-	DPrintf("%d start a heartbeat. %d %d\n", rf.me, oldTerm, time.Now().UnixNano()/1e6)
+	rf.mu.Lock()
+	rf.DPrintf("send AEs")
+	rf.mu.Unlock()
 	total := len(rf.peers)
 	rec := math.MaxInt32
 	applied, visited := 1, 1
@@ -577,16 +540,15 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			if len(rf.log) > rf.nextIndex[i] {
 				s = rf.log[rf.nextIndex[i]:]
 			}
-			//fixme check twice
 			currTerm := rf.currentTerm
-			ok := false
 			args := AppendEntryArgs{oldTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s}
 			rf.mu.Unlock()
 			reply := AppendEntryReply{0, false}
-			//DPrintf("%d sending heartbeat to %d %d\n ", rf.me, i, time.Now().UnixNano()/1e6)
+			ok := false
 			if currTerm == oldTerm {
 				ok = rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
 			}
+
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
@@ -596,28 +558,24 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			if ok && rf.currentTerm == oldTerm && rf.state == 2 { //condition hasn't changed
 				if reply.Success {
 					applied++
-					//rf.nextIndex[i] += len(args.Entries)
-					//rf.matchIndex[i] = rf.nextIndex[i] - 1
-					// update nextIndex and matchIndex  should use previous args' value !!!!max is to prevent downgrading nextIndex from an out-dated reply
+					// update nextIndex and matchIndex  should use previous args' value !!!!
+					//max is to prevent downgrading nextIndex from an out-dated reply
 					rf.nextIndex[i] = max(args.PrevLogIndex+len(args.Entries)+1, rf.nextIndex[i])
 					rf.matchIndex[i] = max(args.PrevLogIndex+len(args.Entries), rf.matchIndex[i])
-					rec = min(rf.matchIndex[i], rec) //fixme
+					rec = min(rf.matchIndex[i], rec)
 				} else {
-					if args.PrevLogIndex == rf.nextIndex[i] - 1{
+					if args.PrevLogIndex == rf.nextIndex[i]-1 {
 						rf.nextIndex[i]--
 					}
 				}
 			}
-
 			visited++
 			cond.Broadcast()
 			mu.Unlock()
 			rf.mu.Unlock()
-
 		}(i)
 	}
 
-	//count of applied
 	mu.Lock()
 	for applied <= total/2 && visited < total {
 		cond.Wait()
@@ -631,8 +589,6 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 					rf.lastApplied++
 					rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
 				}
-				DPrintf("most applied, leader %d commit %d; %d out of %d %d\n", rf.me, rec, applied, total, time.Now().UnixNano()/1e6)
-				//DPrintf("leader %d term %d loglength %d commit %d", rf.me, rf.currentTerm, len(rf.log), rf.commitIndex)
 			}
 		}
 	}

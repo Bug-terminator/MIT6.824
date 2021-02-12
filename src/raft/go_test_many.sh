@@ -38,8 +38,8 @@
 # If you still want to read the code, go ahead.
 
 #remove old files
-#rm -rf test-*
-#rm tester
+rm -rf test-*
+rm tester
 
 if [ $# -eq 1 ] && [ "$1" = "--help" ]; then
 	echo "Usage: $0 [RUNS=100] [PARALLELISM=#cpus] [TESTPATTERN='']"
@@ -54,7 +54,7 @@ if ! go test -c -o tester; then
 fi
 
 # Default to 100 runs unless otherwise specified
-runs=2000
+runs=300
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
@@ -66,7 +66,7 @@ if [ $# -gt 1 ]; then
 fi
 
 # Default to no test filtering unless otherwise specified
-test="TestBackup2B"
+test="2[AB]"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

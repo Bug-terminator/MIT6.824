@@ -3,6 +3,7 @@ package raft
 import (
 	"log"
 	"time"
+	//log "github.com/sirupsen/logrus"
 )
 
 // Debugging
@@ -15,7 +16,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-func MyDPrintf(rf Raft, format string, a ...interface{}) (n int, err error) {
+func (rf *Raft)DPrintf( format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
 		format = "%v: [peer %v (%v) at Term %v] " + format + "\n"
 		a = append([]interface{}{time.Now().UnixNano()/1e6 - rf.allBegin, rf.me, rf.state, rf.currentTerm}, a...)
