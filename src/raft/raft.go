@@ -18,18 +18,18 @@ package raft
 //
 
 import (
-	"bytes"
-	"labgob"
+	"../labrpc"
 	"math"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
-import "sync/atomic"
-import "../labrpc"
 
-// import "bytes"
-// import "../labgob"
+
+
+
+
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -107,12 +107,14 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.log)
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+
+	//
+	//w := new(bytes.Buffer)
+	//e := labgob.NewEncoder(w)
+	//e.Encode(rf.currentTerm)
+	//e.Encode(rf.log)
+	//data := w.Bytes()
+	//rf.persister.SaveRaftState(data)
 }
 
 //
@@ -135,17 +137,19 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
-	var currTerm int
-	var log []LogEntry
-	if d.Decode(&currTerm) != nil ||
-		d.Decode(&log) != nil {
-		DPrintf("decode error")
-	} else {
-		rf.currentTerm = currTerm
-		rf.log = log
-	}
+
+
+	//r := bytes.NewBuffer(data)
+	//d := labgob.NewDecoder(r)
+	//var currTerm int
+	//var log []LogEntry
+	//if d.Decode(&currTerm) != nil ||
+	//	d.Decode(&log) != nil {
+	//	DPrintf("decode error")
+	//} else {
+	//	rf.currentTerm = currTerm
+	//	rf.log = log
+	//}
 }
 
 //
@@ -177,6 +181,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
+		rf.persist()
 		rf.state = 0
 		//2B
 		lastIdx := len(rf.log) - 1
@@ -217,6 +222,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
 		rf.currentTerm = args.Term
+		rf.persist()
 		rf.state = 0
 		rf.ResetElectionTimeout()
 
@@ -370,22 +376,24 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	//2A
 	rf.heartbeatTimeout = 100
-	rf.currentTerm = 0
 	rf.state = 0
 	rf.ResetElectionTimeout()
 	rf.allBegin = rf.lastVisited
 	//2B
 	rf.log = make([]LogEntry, 1)
+
 	rf.log[0] = LogEntry{nil, 0} //dummy element
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.applyCh = applyCh
+	// initialize from state persisted before a crash
+	if rf.persister.RaftStateSize() != 0{
+		rf.readPersist(rf.persister.ReadRaftState())//fixme
+	}
 	go rf.HeartBeatMonitor()
 	go rf.ReElectionMonitor()
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 
 	return rf
 }
@@ -424,6 +432,7 @@ func (rf *Raft) ReElectionMonitor() {
 			rf.voteFor = rf.me
 			rf.state = 1
 			rf.currentTerm++
+			rf.persist()
 			rf.ResetElectionTimeout()
 			go rf.sendRequestVote(oldTerm, lastIdx, lastTerm)
 		}
@@ -458,6 +467,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
+				rf.persist()
 				rf.state = 0
 				//don't do this:
 				//rf.mu.Unlock()
@@ -536,7 +546,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 		}
 		go func(i int) {
 			rf.mu.Lock()
-			s := []LogEntry{}
+			var s []LogEntry
 			if len(rf.log) > rf.nextIndex[i] {
 				s = rf.log[rf.nextIndex[i]:]
 			}
@@ -549,30 +559,31 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 				ok = rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
 			}
 
-			rf.mu.Lock()
+			rf.mu.Lock()// maybe here :deadlock tricky
+			flag := ok && rf.currentTerm == oldTerm && rf.state == 2 && rf.nextIndex[i] - 1 == args.PrevLogIndex//condition hasn't changed
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
+				rf.persist()
 				rf.state = 0
 			}
-			mu.Lock()
-			if ok && rf.currentTerm == oldTerm && rf.state == 2 { //condition hasn't changed
-				if reply.Success {
-					applied++
-					// update nextIndex and matchIndex  should use previous args' value !!!!
-					//max is to prevent downgrading nextIndex from an out-dated reply
-					rf.nextIndex[i] = max(args.PrevLogIndex+len(args.Entries)+1, rf.nextIndex[i])
-					rf.matchIndex[i] = max(args.PrevLogIndex+len(args.Entries), rf.matchIndex[i])
+			if flag{
+				if reply.Success{
+					rf.nextIndex[i] = args.PrevLogIndex+len(args.Entries)+1
+					rf.matchIndex[i] = args.PrevLogIndex+len(args.Entries)
 					rec = min(rf.matchIndex[i], rec)
-				} else {
-					if args.PrevLogIndex == rf.nextIndex[i]-1 {
-						rf.nextIndex[i]--
-					}
+				}else {
+					rf.nextIndex[i]--
 				}
+			}
+			rf.mu.Unlock()
+
+			mu.Lock()
+			if flag && reply.Success{
+				applied++
 			}
 			visited++
 			cond.Broadcast()
 			mu.Unlock()
-			rf.mu.Unlock()
 		}(i)
 	}
 

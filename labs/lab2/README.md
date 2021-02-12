@@ -287,3 +287,14 @@ ok  	_/mnt/c/Users/litang/githubWorkSpace/MIT-6.824repo/src/raft	11.919s
 9. If a leader sends out an `AppendEntries` RPC, and it is rejected, but *not because of log inconsistency* (this can only happen if our term has passed), then you should immediately step down, and *not* update `nextIndex`. If you do, you could race with the resetting of `nextIndex` if you are re-elected immediately.
 
 10. candidate和leader在真正异步发送RPC之前也需要再次检测自己的角色状态是否正确，否则如果自己刚被其他机器的RPC更新了更高的term，然后自己异步像其他机器发送`AppendEntries`的时候，传过去的term就会是更新过的更大的值，然后机器的log被错误更新 (这是一个超大、超难发现的坑)
+
+11. 死锁：我被这个东西折磨了两天，每测试2k次总会出现1到2次某个leader意外的失联。我一开始以为是测试用例错误地调用了kill把我的线程杀死了，后来请教大佬，大佬说可能是死锁我才往这个方向去想，最后发现在我的AppendEntry里面居然真的写了一个死锁。在使用多个锁的时候一定要注意Lock的顺序！！！Unlock倒是无所谓。
+
+测试结果：
+
+测试2k次顺利通过
+
+```shell
+Done 2048/2048; 2048 ok, 0 failed
+```
+

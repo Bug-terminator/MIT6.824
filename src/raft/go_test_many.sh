@@ -54,7 +54,7 @@ if ! go test -c -o tester; then
 fi
 
 # Default to 100 runs unless otherwise specified
-runs=300
+runs=2000
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
@@ -66,7 +66,7 @@ if [ $# -gt 1 ]; then
 fi
 
 # Default to no test filtering unless otherwise specified
-test="2[AB]"
+test="TestBackup2B"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi
