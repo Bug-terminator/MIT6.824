@@ -18,7 +18,9 @@ package raft
 //
 
 import (
+	"../labgob"
 	"../labrpc"
+	"bytes"
 	"math"
 	"math/rand"
 	"sync"
@@ -109,12 +111,12 @@ func (rf *Raft) persist() {
 	// rf.persister.SaveRaftState(data)
 
 	//
-	//w := new(bytes.Buffer)
-	//e := labgob.NewEncoder(w)
-	//e.Encode(rf.currentTerm)
-	//e.Encode(rf.log)
-	//data := w.Bytes()
-	//rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -139,17 +141,17 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 
 
-	//r := bytes.NewBuffer(data)
-	//d := labgob.NewDecoder(r)
-	//var currTerm int
-	//var log []LogEntry
-	//if d.Decode(&currTerm) != nil ||
-	//	d.Decode(&log) != nil {
-	//	DPrintf("decode error")
-	//} else {
-	//	rf.currentTerm = currTerm
-	//	rf.log = log
-	//}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currTerm int
+	var log []LogEntry
+	if d.Decode(&currTerm) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("decode error")
+	} else {
+		rf.currentTerm = currTerm
+		rf.log = log
+	}
 }
 
 //
@@ -212,6 +214,7 @@ type AppendEntryReply struct {
 	// Your data here (2A).
 	Term    int
 	Success bool
+	JumpTo int
 }
 
 //AppendEntry handler
@@ -227,6 +230,17 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 		rf.ResetElectionTimeout()
 
 		if len(rf.log) <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+			//added
+			if len(rf.log) > args.PrevLogIndex{
+				jt := args.PrevLogIndex
+				for rf.log[jt].Term == rf.log[args.PrevLogIndex].Term{
+					jt--
+				}
+				jt++
+				reply.JumpTo = jt
+			} else {
+				reply.JumpTo = len(rf.log)
+			}
 			rf.mu.Unlock()
 			return
 		}
@@ -553,7 +567,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			currTerm := rf.currentTerm
 			args := AppendEntryArgs{oldTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s}
 			rf.mu.Unlock()
-			reply := AppendEntryReply{0, false}
+			reply := AppendEntryReply{0, false,0}
 			ok := false
 			if currTerm == oldTerm {
 				ok = rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
@@ -572,7 +586,8 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 					rf.matchIndex[i] = args.PrevLogIndex+len(args.Entries)
 					rec = min(rf.matchIndex[i], rec)
 				}else {
-					rf.nextIndex[i]--
+					//rf.nextIndex[i]--
+					rf.nextIndex[i] = reply.JumpTo
 				}
 			}
 			rf.mu.Unlock()

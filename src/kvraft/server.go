@@ -3,8 +3,8 @@ package kvraft
 import (
 	"../labgob"
 	"../labrpc"
-	"log"
 	"../raft"
+	"log"
 	"sync"
 	"sync/atomic"
 )
@@ -23,6 +23,10 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	typ string
+	key string
+	value string
+
 }
 
 type KVServer struct {
@@ -44,6 +48,20 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	kv.mu.Lock()
+	if args.Op == "put"{
+		_,_,ok:= kv.rf.Start(args)
+		for ok && !kv.killed(){
+			select {
+			case <-kv.applyCh:
+				reply.Err = OK
+				break//fixme
+			}
+		}
+
+
+	}
+	kv.mu.Unlock()
 }
 
 //
@@ -99,3 +117,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	return kv
 }
+
+
+
