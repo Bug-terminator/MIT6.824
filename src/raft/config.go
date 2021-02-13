@@ -72,6 +72,7 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 	cfg.applyErr = make([]string, cfg.n)
 	cfg.rafts = make([]*Raft, cfg.n)
 	cfg.connected = make([]bool, cfg.n)
+
 	cfg.saved = make([]*Persister, cfg.n)
 	cfg.endnames = make([][]string, cfg.n)
 	cfg.logs = make([]map[int]interface{}, cfg.n)
@@ -233,10 +234,13 @@ func (cfg *config) cleanup() {
 
 // attach server i to the net.
 func (cfg *config) connect(i int) {
-	log.Printf("=======================================connect(%d)====================================================\n", i)
+	//log.Printf("=======================================connect(%d)====================================================\n", i)
 
 	cfg.connected[i] = true
-
+	//added
+	cfg.mu.Lock()
+	DPrintf("[NETWORK] %v",cfg.connected)
+	cfg.mu.Unlock()
 	// outgoing ClientEnds
 	for j := 0; j < cfg.n; j++ {
 		if cfg.connected[j] {
@@ -256,10 +260,12 @@ func (cfg *config) connect(i int) {
 
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
-	log.Printf("======================================DISCONNECT(%d)===================================================\n", i)
-
+	//log.Printf("======================================DISCONNECT(%d)===================================================\n", i)
+	//added
 	cfg.connected[i] = false
-
+	cfg.mu.Lock()
+	DPrintf("[NETWORK] %v",cfg.connected)
+	cfg.mu.Unlock()
 	// outgoing ClientEnds
 	for j := 0; j < cfg.n; j++ {
 		if cfg.endnames[i] != nil {
@@ -428,6 +434,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
+	log.Printf("INFO calling one()")
 	t0 := time.Now()
 	starts := 0
 	for time.Since(t0).Seconds() < 10 {
@@ -460,6 +467,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 					// committed
 					if cmd1 == cmd {
 						// and it was the command we submitted.
+						DPrintf("[INFO] one() true")
 						return index
 					}
 				}

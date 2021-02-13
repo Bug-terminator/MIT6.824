@@ -54,19 +54,19 @@ if ! go test -c -o tester; then
 fi
 
 # Default to 100 runs unless otherwise specified
-runs=2000
+runs=2048
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
 
 # Default to one tester per CPU unless otherwise specified
-parallelism=$(grep -c processor /proc/cpuinfo)
+parallelism=6 #$(grep -c processor /proc/cpuinfo)
 if [ $# -gt 1 ]; then
 	parallelism="$2"
 fi
 
 # Default to no test filtering unless otherwise specified
-test="2C"
+test="TestFigure8Unreliable2C"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

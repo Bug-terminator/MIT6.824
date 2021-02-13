@@ -8,7 +8,9 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
+import (
+	"testing"
+)
 import "fmt"
 import "time"
 import "math/rand"
@@ -371,6 +373,7 @@ func TestRejoin2B(t *testing.T) {
 func TestBackup2B(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, false)
+
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2B): leader backs up quickly over incorrect follower logs")
@@ -773,7 +776,30 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2C): Figure 8 (unreliable)")
-
+	////added
+	//go func() {
+	//	t0 := time.Now()
+	//	cfg.mu.Lock()
+	//	old := make([]bool,len(cfg.connected))
+	//	for i,_ := range cfg.connected{
+	//		old[i] = cfg.connected[i]
+	//	}
+	//	cfg.mu.Unlock()
+	//	for time.Since(t0).Seconds() < 37 {
+	//		time.Sleep(1*time.Millisecond)
+	//		cfg.mu.Lock()
+	//		for i,_ := range old{
+	//			if old[i] != cfg.connected[i]{
+	//				DPrintf("[NETWORK] %v",cfg.connected)
+	//				for j,_ := range old{
+	//					old[j] = cfg.connected[j]
+	//				}
+	//				break
+	//			}
+	//		}
+	//		cfg.mu.Unlock()
+	//	}
+	//}()
 	cfg.one(rand.Int()%10000, 1, true)
 
 	nup := servers

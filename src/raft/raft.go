@@ -28,11 +28,6 @@ import (
 	"time"
 )
 
-
-
-
-
-
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -140,7 +135,6 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.yyy = yyy
 	// }
 
-
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	var currTerm int
@@ -214,16 +208,16 @@ type AppendEntryReply struct {
 	// Your data here (2A).
 	Term    int
 	Success bool
-	JumpTo int
+	JumpTo  int
 }
 
 //AppendEntry handler
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	//2A 2B
 	rf.mu.Lock()
-	rf.DPrintf("receive AE")
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
+		rf.DPrintf("receive AE")
 		rf.currentTerm = args.Term
 		rf.persist()
 		rf.state = 0
@@ -231,15 +225,21 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 
 		if len(rf.log) <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 			//added
-			if len(rf.log) > args.PrevLogIndex{
+			if len(rf.log) > args.PrevLogIndex {
 				jt := args.PrevLogIndex
-				for rf.log[jt].Term == rf.log[args.PrevLogIndex].Term{
+				for rf.log[jt].Term == rf.log[args.PrevLogIndex].Term {
 					jt--
 				}
 				jt++
 				reply.JumpTo = jt
+				if reply.JumpTo <= 0 {
+					rf.DPrintf("ERROR,jt <= 0! %d", jt)
+				}
 			} else {
 				reply.JumpTo = len(rf.log)
+				if reply.JumpTo <= 0 {
+					rf.DPrintf("ERROR,len(log) <= 0! %d", len(rf.log))
+				}
 			}
 			rf.mu.Unlock()
 			return
@@ -405,8 +405,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.applyCh = applyCh
 	// initialize from state persisted before a crash
-	if rf.persister.RaftStateSize() != 0{
-		rf.readPersist(rf.persister.ReadRaftState())//fixme
+	if rf.persister.RaftStateSize() != 0 {
+		rf.readPersist(rf.persister.ReadRaftState())
+		rf.DPrintf("reboot")
 	}
 	go rf.HeartBeatMonitor()
 	go rf.ReElectionMonitor()
@@ -436,7 +437,7 @@ func (rf *Raft) ReElectionMonitor() {
 	for !rf.killed() {
 		rf.mu.Lock()
 		i++
-		if i%500 == 0 { //debug
+		if i%5000 == 0 { //debug
 			rf.DPrintf("alive")
 		}
 		timeNow := time.Now().UnixNano() / 1e6 //ms
@@ -455,9 +456,9 @@ func (rf *Raft) ReElectionMonitor() {
 		rf.mu.Unlock()
 		time.Sleep(1 * time.Millisecond)
 	}
-	rf.mu.Lock()
-	rf.DPrintf("dead")
-	rf.mu.Unlock()
+	//rf.mu.Lock()
+	//rf.DPrintf("dead")
+	//rf.mu.Unlock()
 }
 
 //candidate send requestVote to all peers
@@ -569,33 +570,36 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			currTerm := rf.currentTerm
 			args := AppendEntryArgs{oldTerm, rf.me, rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i]-1].Term, rf.commitIndex, s}
 			rf.mu.Unlock()
-			reply := AppendEntryReply{0, false,0}
+			reply := AppendEntryReply{0, false, 0}
 			ok := false
 			if currTerm == oldTerm {
 				ok = rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
 			}
 
-			rf.mu.Lock()// maybe here :deadlock tricky
-			flag := ok && rf.currentTerm == oldTerm && rf.state == 2 && rf.nextIndex[i] - 1 == args.PrevLogIndex//condition hasn't changed
+			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.persist()
 				rf.state = 0
 			}
-			if flag{
-				if reply.Success{
-					rf.nextIndex[i] = args.PrevLogIndex+len(args.Entries)+1
-					rf.matchIndex[i] = args.PrevLogIndex+len(args.Entries)
+			flag := ok && rf.currentTerm == oldTerm && rf.state == 2 && rf.nextIndex[i]-1 == args.PrevLogIndex //condition hasn't changed
+			if flag {
+				if reply.Success {
+					rf.nextIndex[i] = args.PrevLogIndex + len(args.Entries) + 1
+					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 					rec = min(rf.matchIndex[i], rec)
-				}else {
+				} else {
 					//rf.nextIndex[i]--
 					rf.nextIndex[i] = reply.JumpTo
+					if rf.nextIndex[i] <= 0 {
+						rf.DPrintf("ERROR!index out of range!%d", reply.JumpTo)
+					}
 				}
 			}
 			rf.mu.Unlock()
 
 			mu.Lock()
-			if flag && reply.Success{
+			if flag && reply.Success {//fixme
 				applied++
 			}
 			visited++
