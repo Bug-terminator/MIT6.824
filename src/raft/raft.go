@@ -173,12 +173,13 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
-	rf.DPrintf("receive RV")
 	reply.Term = rf.currentTerm
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.persist()
 		rf.state = 0
+		//rf.DPrintf("receive (%d's) RV",args.CandidateID)
+
 		//2B
 		lastIdx := len(rf.log) - 1
 		lastTerm := rf.log[lastIdx].Term
@@ -187,6 +188,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 			rf.ResetElectionTimeout()
 			rf.voteFor = args.CandidateID
+			rf.DPrintf("vote for %d",args.CandidateID)
+		}else {
+			rf.DPrintf("reject %d's RV",args.CandidateID)
 		}
 	}
 	rf.mu.Unlock()
@@ -217,7 +221,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	rf.mu.Lock()
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
-		rf.DPrintf("receive AE")
+		//rf.DPrintf("receive AE")
 		rf.currentTerm = args.Term
 		rf.persist()
 		rf.state = 0
@@ -241,6 +245,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 					rf.DPrintf("ERROR,len(log) <= 0! %d", len(rf.log))
 				}
 			}
+			rf.DPrintf("[reject %v's AE]jumpTo (%v)",args.LeaderId,reply.JumpTo)
 			rf.mu.Unlock()
 			return
 		}
@@ -251,6 +256,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			if len(rf.log) <= iter || rf.log[iter].Term != entry.Term {
 				rf.log = rf.log[:iter]
 				rf.log = append(rf.log, args.Entries[i:]...)
+				rf.DPrintf("[process %v's AE]append logs",args.LeaderId)
 				rf.persist()
 				break
 			} else {
@@ -259,11 +265,15 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 		}
 
 		if args.LeaderCommit > rf.commitIndex {
+			if args.LeaderCommit > len(rf.log) - 1{
+				rf.DPrintf("ERROR leadercommit > rf.lastIdx")
+			}
 			rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
 			for rf.commitIndex > rf.lastApplied {
 				rf.lastApplied++
 				rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
 			}
+			rf.DPrintf("[process %v's AE]commit index")
 		}
 	}
 	rf.mu.Unlock()
@@ -515,6 +525,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			}
 			rf.ResetHeartBeatTimeout()
 			go rf.sendHeartBeat(oldTerm)
+			rf.DPrintf("becomes leader")
 		}
 	}
 	rf.mu.Unlock()
