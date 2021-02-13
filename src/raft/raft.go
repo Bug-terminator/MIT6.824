@@ -251,6 +251,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			if len(rf.log) <= iter || rf.log[iter].Term != entry.Term {
 				rf.log = rf.log[:iter]
 				rf.log = append(rf.log, args.Entries[i:]...)
+				rf.persist()
 				break
 			} else {
 				iter++
@@ -343,6 +344,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	if isLeader {
 		rf.log = append(rf.log, LogEntry{command, term})
+		rf.persist()
 	}
 	rf.mu.Unlock()
 	return index, term, isLeader
