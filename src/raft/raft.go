@@ -178,7 +178,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 		rf.persist()
 		rf.state = 0
-		//rf.DPrintf("receive (%d's) RV",args.CandidateID)
+		rf.DPrintf("[receive RV] %d (%d)",rf.me,args.CandidateID)
 
 		//2B
 		lastIdx := len(rf.log) - 1
@@ -188,10 +188,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 			rf.ResetElectionTimeout()
 			rf.voteFor = args.CandidateID
-			rf.DPrintf("vote for %d",args.CandidateID)
-		}else {
-			rf.DPrintf("reject %d's RV",args.CandidateID)
+			rf.DPrintf("%d vote for %d and reset e-timeout",rf.me, args.CandidateID)
+		} else {
+			rf.DPrintf("%d not vote for %d: non-up-to-date",rf.me, args.CandidateID)
 		}
+	}else {
+		rf.DPrintf("[%d reject low-term RV from %d]",rf.me, args.CandidateID)
 	}
 	rf.mu.Unlock()
 }
@@ -221,11 +223,11 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	rf.mu.Lock()
 	reply.Term = rf.currentTerm
 	if args.Term >= rf.currentTerm {
-		//rf.DPrintf("receive AE")
 		rf.currentTerm = args.Term
 		rf.persist()
 		rf.state = 0
 		rf.ResetElectionTimeout()
+		rf.DPrintf("[receive AE]%d (%d)",rf.me,args.LeaderId)
 
 		if len(rf.log) <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 			//added
@@ -245,7 +247,8 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 					rf.DPrintf("ERROR,len(log) <= 0! %d", len(rf.log))
 				}
 			}
-			rf.DPrintf("[reject %v's AE]jumpTo (%v)",args.LeaderId,reply.JumpTo)
+			rf.DPrintf("%d preUnMatch, jumpTo (%v)",rf.me, reply.JumpTo)
+
 			rf.mu.Unlock()
 			return
 		}
@@ -256,7 +259,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			if len(rf.log) <= iter || rf.log[iter].Term != entry.Term {
 				rf.log = rf.log[:iter]
 				rf.log = append(rf.log, args.Entries[i:]...)
-				rf.DPrintf("[process %v's AE]append logs",args.LeaderId)
+				rf.DPrintf("%d append Logs",rf.me)
 				rf.persist()
 				break
 			} else {
@@ -265,7 +268,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 		}
 
 		if args.LeaderCommit > rf.commitIndex {
-			if args.LeaderCommit > len(rf.log) - 1{
+			if args.LeaderCommit > len(rf.log)-1 {
 				rf.DPrintf("ERROR leadercommit > rf.lastIdx")
 			}
 			rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
@@ -273,8 +276,11 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 				rf.lastApplied++
 				rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
 			}
-			rf.DPrintf("[process %v's AE]commit index")
+			rf.DPrintf("%d commit index",rf.me)
+
 		}
+	}else {
+		rf.DPrintf("%d reject low-term AE from %d",rf.me,args.LeaderId)
 	}
 	rf.mu.Unlock()
 }
@@ -474,7 +480,7 @@ func (rf *Raft) ReElectionMonitor() {
 //candidate send requestVote to all peers
 func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	rf.mu.Lock()
-	rf.DPrintf("send RVs")
+	rf.DPrintf("[%d send RVs]",rf.me)
 	rf.mu.Unlock()
 	//concurrency request vote
 	total := len(rf.peers)
@@ -496,10 +502,9 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 				rf.currentTerm = reply.Term
 				rf.persist()
 				rf.state = 0
-				//don't do this:
-				//rf.mu.Unlock()
-				//return
+				rf.DPrintf("%d turns to follower in RV by %d",rf.me,i)
 			}
+
 			rf.mu.Unlock()
 			mu.Lock()
 			if reply.VoteGranted {
@@ -525,8 +530,12 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			}
 			rf.ResetHeartBeatTimeout()
 			go rf.sendHeartBeat(oldTerm)
-			rf.DPrintf("becomes leader")
+			rf.DPrintf("[becomes leader] %d/%d", get,visited)
+		} else {
+			rf.DPrintf("[lose election] %d/%d", get,visited)
 		}
+	} else {
+		rf.DPrintf("election cond change:state %d != 1 or term %d != %d",rf.state,rf.currentTerm,oldTerm)
 	}
 	rf.mu.Unlock()
 	mu.Unlock()
@@ -561,7 +570,7 @@ func (rf *Raft) HeartBeatMonitor() { //todo improve use for-select rewrite this 
 // leader send heartBeat to every follower
 func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 	rf.mu.Lock()
-	rf.DPrintf("send AEs")
+	rf.DPrintf("[%d send AEs]",rf.me)
 	rf.mu.Unlock()
 	total := len(rf.peers)
 	rec := math.MaxInt32
@@ -592,25 +601,31 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 				rf.currentTerm = reply.Term
 				rf.persist()
 				rf.state = 0
+				rf.DPrintf("%d turns to follower in AE by %d",rf.me, i)
 			}
+
 			flag := ok && rf.currentTerm == oldTerm && rf.state == 2 && rf.nextIndex[i]-1 == args.PrevLogIndex //condition hasn't changed
 			if flag {
 				if reply.Success {
 					rf.nextIndex[i] = args.PrevLogIndex + len(args.Entries) + 1
 					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 					rec = min(rf.matchIndex[i], rec)
+					//rf.DPrintf("[%d inform leader%d preMatch] update nextIndex[%d]",rf.me, i,i)
 				} else {
 					//rf.nextIndex[i]--
 					rf.nextIndex[i] = reply.JumpTo
 					if rf.nextIndex[i] <= 0 {
 						rf.DPrintf("ERROR!index out of range!%d", reply.JumpTo)
 					}
+					//rf.DPrintf("[%d inform leader%d preUnMatch] jumpTo %d",rf.me, i,reply.JumpTo)
 				}
+			}else {
+				//rf.DPrintf("[AE cond changed]%d (%d)",rf.me, i)
 			}
 			rf.mu.Unlock()
 
 			mu.Lock()
-			if flag && reply.Success {//fixme
+			if flag && reply.Success { //fixme
 				applied++
 			}
 			visited++
@@ -632,8 +647,15 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 					rf.lastApplied++
 					rf.applyCh <- ApplyMsg{true, rf.log[rf.lastApplied].Command, rf.lastApplied}
 				}
+				rf.DPrintf("[most committed, leader commit] %d/%d",applied,visited)
+			}else{
+				//rf.DPrintf("ERROR [double check FAIL]%d %d %d %d",rec,rf.commitIndex,rf.log[rec].Term,rf.currentTerm)todo
 			}
+		}else {
+			rf.DPrintf("[non most commit,leader FAIL commit] %d/%d",applied,visited)
 		}
+	}else {
+		//rf.DPrintf("[AE cond changed at CNT]")
 	}
 	rf.mu.Unlock()
 	mu.Unlock()
