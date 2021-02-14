@@ -60,7 +60,7 @@ if [ $# -gt 0 ]; then
 fi
 
 # Default to one tester per CPU unless otherwise specified
-parallelism=6 #$(grep -c processor /proc/cpuinfo)
+parallelism=$(grep -c processor /proc/cpuinfo)
 if [ $# -gt 1 ]; then
 	parallelism="$2"
 fi

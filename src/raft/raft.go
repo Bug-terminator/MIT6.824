@@ -480,6 +480,11 @@ func (rf *Raft) ReElectionMonitor() {
 //candidate send requestVote to all peers
 func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 	rf.mu.Lock()
+	//added
+	if rf.currentTerm != oldTerm || rf.state != 1{
+		rf.mu.Unlock()
+		return
+	}
 	rf.DPrintf("[%d send RVs]",rf.me)
 	rf.mu.Unlock()
 	//concurrency request vote
@@ -493,8 +498,20 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			continue
 		}
 		go func(i int) {
+			//added
+			rf.mu.Lock()
+			if rf.currentTerm != oldTerm || rf.state != 1{
+				rf.mu.Unlock()
+				mu.Lock()
+				visited++
+				cond.Broadcast()
+				mu.Unlock()
+				return
+			}
 			args := RequestVoteArgs{oldTerm, rf.me, lastIdx, lastTerm}
 			reply := RequestVoteReply{0, false}
+			rf.mu.Unlock()
+
 			rf.peers[i].Call("Raft.RequestVote", &args, &reply)
 
 			rf.mu.Lock()
@@ -570,8 +587,14 @@ func (rf *Raft) HeartBeatMonitor() { //todo improve use for-select rewrite this 
 // leader send heartBeat to every follower
 func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 	rf.mu.Lock()
+	//added
+	if rf.currentTerm != oldTerm || rf.state != 2{
+		rf.mu.Unlock()
+		return
+	}
 	rf.DPrintf("[%d send AEs]",rf.me)
 	rf.mu.Unlock()
+
 	total := len(rf.peers)
 	rec := math.MaxInt32
 	applied, visited := 1, 1
@@ -583,6 +606,16 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 		}
 		go func(i int) {
 			rf.mu.Lock()
+			//added
+			if rf.currentTerm != oldTerm || rf.state != 2{
+				rf.mu.Unlock()
+				mu.Lock()
+				visited++
+				cond.Broadcast()
+				mu.Unlock()
+				return
+			}
+
 			var s []LogEntry
 			if len(rf.log) > rf.nextIndex[i] {
 				s = rf.log[rf.nextIndex[i]:]
@@ -655,7 +688,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			rf.DPrintf("[non most commit,leader FAIL commit] %d/%d",applied,visited)
 		}
 	}else {
-		//rf.DPrintf("[AE cond changed at CNT]")
+		rf.DPrintf("AE cond changed: state %d != 2 or term %d != %d",rf.state,rf.currentTerm,oldTerm)
 	}
 	rf.mu.Unlock()
 	mu.Unlock()
