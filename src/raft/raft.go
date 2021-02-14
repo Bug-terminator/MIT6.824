@@ -253,7 +253,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			return
 		}
 		reply.Success = true
-
+		rf.DPrintf("preMatch, processing")
 		iter := args.PrevLogIndex + 1
 		for i, entry := range args.Entries {
 			if len(rf.log) <= iter || rf.log[iter].Term != entry.Term {
@@ -433,7 +433,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 //request vote random timeout generator,range: [200,400)
 func RandomTimeGenerator() int64 {
-	rd := rand.New(rand.NewSource(time.Now().UnixNano())).Int63n(500) + 150
+	rd := rand.New(rand.NewSource(time.Now().UnixNano())).Int63n(150) + 500//triiiiiiiky
 	return rd
 }
 
@@ -526,6 +526,7 @@ func (rf *Raft) sendRequestVote(oldTerm int, lastIdx int, lastTerm int) {
 			mu.Lock()
 			if reply.VoteGranted {
 				get++
+				rf.DPrintf("get++")
 			}
 			visited++
 			cond.Broadcast()
@@ -627,6 +628,9 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			ok := false
 			if currTerm == oldTerm {
 				ok = rf.peers[i].Call("Raft.AppendEntry", &args, &reply) //so tricky
+				if !ok{
+					DPrintf("WARNING %d lost",i)
+				}
 			}
 
 			rf.mu.Lock()
@@ -638,6 +642,7 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			}
 
 			flag := ok && rf.currentTerm == oldTerm && rf.state == 2 && rf.nextIndex[i]-1 == args.PrevLogIndex //condition hasn't changed
+			//DPrintf("!!!check:%v %v==%v %v==2 %v==%v %v",ok,rf.currentTerm,oldTerm,rf.state,rf.nextIndex[i]-1,args.PrevLogIndex,reply.Success)
 			if flag {
 				if reply.Success {
 					rf.nextIndex[i] = args.PrevLogIndex + len(args.Entries) + 1
@@ -660,6 +665,10 @@ func (rf *Raft) sendHeartBeat( /*oldRf Raft*/ oldTerm int) {
 			mu.Lock()
 			if flag && reply.Success { //fixme
 				applied++
+				rf.DPrintf("applied++")
+			}else{
+				//rf.DPrintf("unApplied %v %v",flag,reply.Success)
+				DPrintf("WARNING unapplied!!!check:%v %v==%v %v==2 %v==%v %v",ok,rf.currentTerm,oldTerm,rf.state,rf.nextIndex[i]-1,args.PrevLogIndex,reply.Success)
 			}
 			visited++
 			cond.Broadcast()
