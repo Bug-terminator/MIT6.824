@@ -4,18 +4,12 @@ MapReduce有两个阶段：拆分处理（Map）和归一统计（Reduce）。
 
 **1、实验**
 
-整个阶段我们依靠一个master和若干个worker，**有序的进行**。
-
-首先我们启动一个master，三个worker；master会告诉worker，现在是Map阶段，你执行文件1，你执行文件2 ......
-
-当Worker完成Map任务之后，必须向master汇报，因为这将告诉master，是否应该进行下一Reduce阶段。如果所有文件都处理完毕，master将调整状态为Reduce：
-
-可是当我们真正来到实验，需要考虑一些问题。
+要设计一个MapReduce系统，我们需要考虑一些问题：
 
 1. 一个master，worker需要包含哪些成员
 2. 如何表示任务，任务用什么样的方式进行分发
 
-所以我们渴望将系统成下图这个样子：worker向master请求任务，master根据实际情况分发任务（先Map，后Reduce）。
+我们希望系统按照下图的方式运行：worker向master请求任务，master根据实际情况分发任务（先Map，后Reduce）。
 
 ![img](https://github.com/Bug-terminator/MIT6.824/blob/master/labs/lab1/%E6%B5%81%E7%A8%8B%E5%9B%BE.jpg)
 
