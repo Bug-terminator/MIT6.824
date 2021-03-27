@@ -120,7 +120,7 @@ type master struct {
 }
 ```
 
-测试程序会调用Makemaster方法创建一个master对象，我们需要根据传入的文件名和Reduce任务的数量来初始化我们的Map队列和Reduce队列：
+4. 测试程序会调用Makemaster方法创建一个master对象，我们需要根据传入的文件名和Reduce任务的数量来初始化我们的Map队列和Reduce队列：
 
 ```go
 func Makemaster(files []string, nReduce int) *master {
@@ -139,7 +139,7 @@ func Makemaster(files []string, nReduce int) *master {
 }
 ```
 
-测试程序会循环调用Done方法检查整个程序是否已经结束了，很简单，判断Reduce任务是否完成即可：
+5. 测试程序会循环调用Done方法检查整个程序是否已经结束了，很简单，判断Reduce任务是否完成即可：
 
 ```go
 func (m *master) Done() bool {
@@ -153,17 +153,19 @@ func (m *master) Done() bool {
 
 用单词统计作为例子：
 
-- 我有一堆文件需要统计单词的数量，首先将把文件分配到各个Map，它们会统计字符，并且输出键值对：
+假设我有一堆文件需要统计单词的数量，首先将把文件分配到各个Map，它们会统计字符，并且输出键值对：
 
 > Hello, my name is gyh, your name?
+> 
 > Hello, your name is nice
 
-- 上述两句话，分配给两个Map任务，将得到：
+上述两句话，分配给两个Map任务，将得到：
 
 > 1: <hello,1> <my,1> <name,1> <is,1> <gyh,1> <your,1><name,1>
+> 
 > 2: <hello,1> <name,1> <is,1> <your,1> <nice,1>
 
-- 紧接着，在将输出的键值对分配给Reduce任务之前，我们需要根据键来把相同的单词哈希到相同的文件中去。但是在实际中，由于Map任务和Reduce任务均运行在不同的结点中，我们无法把相同的单词都汇总在同一个文件里，所以我们需要将相同的单词哈希到同一组文件中去，假设有N个Map任务，M个Reduce任务，那么中间文件的个数将达到MXN个。我们约定中间文件的命名为mr-X-Y,其中X表示Map任务号，Y表示Reduce任务号，哈希函数会把相同的单词哈希成同一个32位整型数，我们用这个数对Reduce任务数取余就能得到中间文件的后缀：
+紧接着，在将输出的键值对分配给Reduce任务之前，我们需要根据键来把相同的单词哈希到相同的文件中去。但是在实际中，由于Map任务和Reduce任务均运行在不同的结点中，我们无法把相同的单词都汇总在同一个文件里，所以我们需要将相同的单词哈希到同一组文件中去，假设有N个Map任务，M个Reduce任务，那么中间文件的个数将达到MXN个。我们约定中间文件的命名为mr-X-Y,其中X表示Map任务号，Y表示Reduce任务号，哈希函数会把相同的单词哈希成同一个32位整型数，我们用这个数对Reduce任务数取余就能得到中间文件的后缀：
 
 ```go
 func ihash(key string) int {
@@ -177,7 +179,7 @@ for _, kv := range kva {
 }
 ```
 
-- 那么上面两句话经过哈希将产生下面四个文件：
+那么上面两句话经过哈希将产生下面四个文件：
 
 > mr-1-1:<hello,1><name,1><your,1><name,1>
 >
@@ -187,18 +189,19 @@ for _, kv := range kva {
 >
 > mr-2-2: <is,1><nice,1>
 
-- Reduce任务就根据自身的号来这读取些文件，将它们汇总成一个文件：
+Reduce任务就根据自身的号来这读取些文件，将它们汇总成一个文件：
 
 > Map任务1：读入mr-1-1和mr-2-1并汇总：<hello,1><name,1><your,1><name,1><hello,1> <name,1><your,1>
 >
 > Map任务2：读入mr-1-2和mr-2-2并汇总：<my,1><is,1><gyh,1><is,1><nice,1>
 
-- 可以发现相同的单词一定会在相同的后缀文件中出现，我们现在需要排一下序（也就是所谓的shuffle）：
+可以发现相同的单词一定会在相同的后缀文件中出现，我们现在需要排一下序（也就是所谓的shuffle）：
 
 > <name,1><name,1><name,1><hello,1><hello,1><your,1><your,1>
+> 
 > <gyh,1><is,1><is,1><my,1><nice,1>
 
-- 然后遍历并统计连续单词的数量得到最终答案：
+然后遍历并统计连续单词的数量得到最终答案：
 
 > <name,3><hello,2><your,2>
 >
